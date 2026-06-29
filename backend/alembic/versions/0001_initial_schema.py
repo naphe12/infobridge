@@ -18,25 +18,96 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    institution_type = postgresql.ENUM("MINISTRY", "BANK", "COMMUNE", "AGENCY", "OPERATOR", "PRIVATE", "OTHER", name="institution_type")
-    institution_status = postgresql.ENUM("ACTIVE", "SUSPENDED", "ARCHIVED", name="institution_status")
-    user_role = postgresql.ENUM("SYSTEM_ADMIN", "INSTITUTION_ADMIN", "AGENT", "VALIDATOR", "OBSERVER", name="user_role")
-    user_status = postgresql.ENUM("ACTIVE", "LOCKED", "DISABLED", name="user_status")
-    case_status = postgresql.ENUM("DRAFT", "SENT", "RECEIVED", "IN_REVIEW", "APPROVED", "REJECTED", "CLOSED", "ARCHIVED", name="case_status")
-    case_priority = postgresql.ENUM("LOW", "NORMAL", "HIGH", "URGENT", name="case_priority")
-    classification = postgresql.ENUM("PUBLIC", "INTERNE", "CONFIDENTIEL", "SECRET", name="classification")
-    workflow_status = postgresql.ENUM("PENDING", "IN_PROGRESS", "APPROVED", "REJECTED", "CLOSED", name="workflow_status")
-    security_severity = postgresql.ENUM("LOW", "MEDIUM", "HIGH", "CRITICAL", name="security_severity")
+    institution_type = postgresql.ENUM(
+        "MINISTRY",
+        "BANK",
+        "COMMUNE",
+        "AGENCY",
+        "OPERATOR",
+        "PRIVATE",
+        "OTHER",
+        name="institution_type",
+        create_type=False,
+    )
+    institution_status = postgresql.ENUM(
+        "ACTIVE",
+        "SUSPENDED",
+        "ARCHIVED",
+        name="institution_status",
+        create_type=False,
+    )
+    user_role = postgresql.ENUM(
+        "SYSTEM_ADMIN",
+        "INSTITUTION_ADMIN",
+        "AGENT",
+        "VALIDATOR",
+        "OBSERVER",
+        name="user_role",
+        create_type=False,
+    )
+    user_status = postgresql.ENUM(
+        "ACTIVE",
+        "LOCKED",
+        "DISABLED",
+        name="user_status",
+        create_type=False,
+    )
+    case_status = postgresql.ENUM(
+        "DRAFT",
+        "SENT",
+        "RECEIVED",
+        "IN_REVIEW",
+        "APPROVED",
+        "REJECTED",
+        "CLOSED",
+        "ARCHIVED",
+        name="case_status",
+        create_type=False,
+    )
+    case_priority = postgresql.ENUM(
+        "LOW",
+        "NORMAL",
+        "HIGH",
+        "URGENT",
+        name="case_priority",
+        create_type=False,
+    )
+    classification = postgresql.ENUM(
+        "PUBLIC",
+        "INTERNE",
+        "CONFIDENTIEL",
+        "SECRET",
+        name="classification",
+        create_type=False,
+    )
+    workflow_status = postgresql.ENUM(
+        "PENDING",
+        "IN_PROGRESS",
+        "APPROVED",
+        "REJECTED",
+        "CLOSED",
+        name="workflow_status",
+        create_type=False,
+    )
+    security_severity = postgresql.ENUM(
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "CRITICAL",
+        name="security_severity",
+        create_type=False,
+    )
 
-    institution_type.create(op.get_bind())
-    institution_status.create(op.get_bind())
-    user_role.create(op.get_bind())
-    user_status.create(op.get_bind())
-    case_status.create(op.get_bind())
-    case_priority.create(op.get_bind())
-    classification.create(op.get_bind())
-    workflow_status.create(op.get_bind())
-    security_severity.create(op.get_bind())
+    bind = op.get_bind()
+    institution_type.create(bind, checkfirst=True)
+    institution_status.create(bind, checkfirst=True)
+    user_role.create(bind, checkfirst=True)
+    user_status.create(bind, checkfirst=True)
+    case_status.create(bind, checkfirst=True)
+    case_priority.create(bind, checkfirst=True)
+    classification.create(bind, checkfirst=True)
+    workflow_status.create(bind, checkfirst=True)
+    security_severity.create(bind, checkfirst=True)
 
     op.create_table(
         "institutions",
@@ -208,4 +279,4 @@ def downgrade() -> None:
         "institution_status",
         "institution_type",
     ):
-        postgresql.ENUM(name=enum_name).drop(op.get_bind())
+        postgresql.ENUM(name=enum_name).drop(op.get_bind(), checkfirst=True)
