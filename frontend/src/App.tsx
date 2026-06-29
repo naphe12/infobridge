@@ -298,7 +298,14 @@ export function App() {
       });
 
       if (!response.ok) {
-        throw new Error("Login failed");
+        if (response.status === 401) {
+          setLoginError("Identifiants incorrects.");
+          return;
+        }
+
+        const errorPayload = (await response.json().catch(() => null)) as { detail?: string } | null;
+        setLoginError(errorPayload?.detail ?? `Erreur API ${response.status}.`);
+        return;
       }
 
       const data = (await response.json()) as LoginResponse;
@@ -315,7 +322,7 @@ export function App() {
       setLoginError("");
       setIsAuthenticated(true);
     } catch {
-      setLoginError("Connexion impossible. Vérifiez vos identifiants ou la disponibilité de l'API.");
+      setLoginError(`API injoignable. Vérifiez VITE_API_URL: ${apiUrl}`);
     }
   }
 
