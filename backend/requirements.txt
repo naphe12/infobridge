@@ -1,0 +1,11 @@
+alembic==1.13.2
+argon2-cffi==23.1.0
+email-validator==2.2.0
+fastapi==0.115.0
+psycopg[binary]==3.2.1
+pydantic-settings==2.5.2
+python-jose[cryptography]==3.3.0
+python-multipart==0.0.9
+SQLAlchemy==2.0.35
+uvicorn[standard]==0.30.6
+

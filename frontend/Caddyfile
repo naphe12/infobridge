@@ -1,0 +1,16 @@
+{
+	auto_https off
+}
+
+:{$PORT} {
+	root * /srv
+	encode gzip
+
+	handle /health {
+		respond "ok" 200
+	}
+
+	try_files {path} /index.html
+	file_server
+}
+
