@@ -7,12 +7,17 @@ import {
   CheckCircle2,
   ChevronDown,
   Clock3,
+  Eye,
+  EyeOff,
   FileCheck2,
   FilePlus2,
   Fingerprint,
   Inbox,
   LayoutDashboard,
   LockKeyhole,
+  LogIn,
+  LogOut,
+  Mail,
   MessageSquareText,
   MoreHorizontal,
   Search,
@@ -21,7 +26,7 @@ import {
   Users,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import type { FormEvent, ReactNode } from "react";
 
 const apiUrl = import.meta.env.VITE_API_URL ?? "http://localhost:8000/api/v1";
 
@@ -106,6 +111,9 @@ const navItems = [
 ];
 
 export function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(() => sessionStorage.getItem("infobridge_session") === "active");
+  const [loginError, setLoginError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [dashboard, setDashboard] = useState<Dashboard>({
     institutions: 0,
     users: 0,
@@ -114,6 +122,10 @@ export function App() {
   });
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
     fetch(`${apiUrl}/dashboard`)
       .then((response) => {
         if (!response.ok) {
@@ -130,7 +142,7 @@ export function App() {
           security_events: 0,
         });
       });
-  }, []);
+  }, [isAuthenticated]);
 
   const metrics = useMemo(
     () => [
@@ -161,6 +173,119 @@ export function App() {
     ],
     [dashboard],
   );
+
+  function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const email = String(formData.get("email") ?? "").trim();
+    const password = String(formData.get("password") ?? "");
+
+    if (!email || !password) {
+      setLoginError("Renseignez votre adresse e-mail et votre mot de passe.");
+      return;
+    }
+
+    sessionStorage.setItem("infobridge_session", "active");
+    setLoginError("");
+    setIsAuthenticated(true);
+  }
+
+  function handleLogout() {
+    sessionStorage.removeItem("infobridge_session");
+    setIsAuthenticated(false);
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <main className="login-shell">
+        <section className="login-visual" aria-label="Présentation InfoBridge">
+          <div className="login-brand">
+            <span className="brand-mark">
+              <ShieldCheck size={22} />
+            </span>
+            <span>InfoBridge</span>
+          </div>
+          <div className="login-copy">
+            <span className="section-label">Accès sécurisé</span>
+            <h1>Connexion au centre de coordination</h1>
+            <p>
+              Suivez les échanges sensibles, vérifiez les dossiers institutionnels et gardez une trace claire de chaque
+              décision.
+            </p>
+          </div>
+          <div className="login-assurance">
+            <div>
+              <Fingerprint size={20} />
+              <span>Contrôle d'identité</span>
+            </div>
+            <div>
+              <LockKeyhole size={20} />
+              <span>Session protégée</span>
+            </div>
+            <div>
+              <Archive size={20} />
+              <span>Journal d'audit</span>
+            </div>
+          </div>
+        </section>
+
+        <section className="login-panel" aria-label="Formulaire de connexion">
+          <div className="login-card">
+            <div className="login-card-header">
+              <span className="login-icon">
+                <LogIn size={20} />
+              </span>
+              <div>
+                <h2>Se connecter</h2>
+                <p>Utilisez votre compte institutionnel.</p>
+              </div>
+            </div>
+
+            <form className="login-form" onSubmit={handleLogin}>
+              <label>
+                <span>Adresse e-mail</span>
+                <div className="input-control">
+                  <Mail size={18} />
+                  <input name="email" placeholder="nom@institution.gov.bi" type="email" />
+                </div>
+              </label>
+
+              <label>
+                <span>Mot de passe</span>
+                <div className="input-control">
+                  <LockKeyhole size={18} />
+                  <input name="password" placeholder="Mot de passe" type={showPassword ? "text" : "password"} />
+                  <button
+                    aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                    className="password-toggle"
+                    onClick={() => setShowPassword((value) => !value)}
+                    type="button"
+                  >
+                    {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                  </button>
+                </div>
+              </label>
+
+              <div className="login-options">
+                <label className="remember-option">
+                  <input type="checkbox" />
+                  <span>Garder la session active</span>
+                </label>
+                <a href="/">Mot de passe oublié</a>
+              </div>
+
+              {loginError ? <p className="form-error">{loginError}</p> : null}
+
+              <button className="primary-button login-submit" type="submit">
+                <LogIn size={18} />
+                Accéder à InfoBridge
+              </button>
+            </form>
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="app-shell">
@@ -211,6 +336,9 @@ export function App() {
             <button className="primary-button" type="button">
               <FilePlus2 size={18} />
               Nouveau dossier
+            </button>
+            <button className="icon-button" onClick={handleLogout} type="button" aria-label="Se déconnecter">
+              <LogOut size={18} />
             </button>
           </div>
         </header>
