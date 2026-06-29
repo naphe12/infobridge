@@ -66,19 +66,23 @@ button {
   gap: 6px;
 }
 
-.nav-list a {
+.nav-list button {
   align-items: center;
+  background: transparent;
+  border: 0;
   border-radius: 8px;
   color: #bdc9d5;
   display: flex;
   gap: 11px;
+  justify-content: flex-start;
   min-height: 42px;
   padding: 0 12px;
+  text-align: left;
   text-decoration: none;
 }
 
-.nav-list a.active,
-.nav-list a:hover {
+.nav-list button.active,
+.nav-list button:hover {
   background: #263547;
   color: #ffffff;
 }
@@ -246,6 +250,61 @@ button {
   gap: 16px;
 }
 
+.role-switch {
+  border: 0;
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+}
+
+.role-switch legend {
+  color: #3a4654;
+  font-size: 13px;
+  font-weight: 800;
+  margin-bottom: 7px;
+  padding: 0;
+}
+
+.role-switch label {
+  align-items: center;
+  border: 1px solid #cfd8e2;
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  min-height: 58px;
+  padding: 10px 12px;
+}
+
+.role-switch label:has(input:checked) {
+  background: #e8f3f0;
+  border-color: #176b5d;
+}
+
+.role-switch input {
+  accent-color: #176b5d;
+  height: 16px;
+  margin: 0;
+  width: 16px;
+}
+
+.role-switch span,
+.role-switch strong,
+.role-switch small {
+  display: block;
+}
+
+.role-switch strong {
+  color: #1b2430;
+  font-size: 13px;
+}
+
+.role-switch small {
+  color: #667383;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
 .login-form label {
   display: grid;
   gap: 7px;
@@ -376,6 +435,12 @@ h1 {
   font-size: 30px;
   line-height: 1.15;
   margin-bottom: 0;
+}
+
+.user-context {
+  color: #667383;
+  font-size: 13px;
+  margin: 7px 0 0;
 }
 
 h2 {
@@ -512,7 +577,9 @@ h2 {
 }
 
 .case-panel,
+.document-panel,
 .security-card,
+.settings-panel,
 .rail-section {
   background: #ffffff;
   border: 1px solid #d9e0e7;
@@ -812,6 +879,193 @@ h2 {
   font-size: 24px;
 }
 
+.admin-layout,
+.documents-layout {
+  display: grid;
+  gap: 18px;
+}
+
+.admin-hero {
+  align-items: center;
+  background: #202c3a;
+  border-radius: 8px;
+  color: #ffffff;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  padding: 22px;
+}
+
+.admin-hero .section-label {
+  color: #f1b84b;
+}
+
+.admin-hero h2 {
+  color: #ffffff;
+  font-size: 24px;
+  margin-bottom: 8px;
+}
+
+.admin-hero p {
+  color: #c6d0da;
+  line-height: 1.5;
+  margin-bottom: 0;
+  max-width: 720px;
+}
+
+.admin-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-module {
+  background: #ffffff;
+  border: 1px solid #d9e0e7;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  min-height: 184px;
+  padding: 17px;
+}
+
+.admin-module-icon {
+  align-items: center;
+  background: #e8f3f0;
+  border-radius: 8px;
+  color: #176b5d;
+  display: inline-flex;
+  height: 42px;
+  justify-content: center;
+  width: 42px;
+}
+
+.admin-module strong {
+  color: #16202b;
+  font-size: 15px;
+}
+
+.admin-module p {
+  color: #667383;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.admin-module span {
+  align-self: end;
+  color: #334255;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.settings-list {
+  display: grid;
+}
+
+.setting-row {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  min-height: 56px;
+  padding: 0 17px;
+}
+
+.setting-row + .setting-row {
+  border-top: 1px solid #edf1f4;
+}
+
+.setting-row span {
+  color: #4b5968;
+  font-size: 14px;
+}
+
+.setting-row strong {
+  color: #334255;
+  font-size: 13px;
+}
+
+.setting-row strong.success {
+  color: #176b5d;
+}
+
+.setting-row strong.warning {
+  color: #9a520d;
+}
+
+.document-tools {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(260px, 1fr) auto auto;
+}
+
+.document-search {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d7dee6;
+  border-radius: 8px;
+  color: #637080;
+  display: flex;
+  gap: 9px;
+  min-height: 42px;
+  padding: 0 12px;
+}
+
+.document-search input {
+  border: 0;
+  color: #1b2430;
+  min-width: 0;
+  outline: 0;
+  width: 100%;
+}
+
+.document-list {
+  display: grid;
+}
+
+.document-row {
+  align-items: center;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 42px minmax(260px, 1fr) 120px 110px 82px 116px 42px;
+  min-height: 82px;
+  padding: 14px 17px;
+}
+
+.document-row + .document-row {
+  border-top: 1px solid #edf1f4;
+}
+
+.document-icon {
+  align-items: center;
+  background: #eef0f3;
+  border-radius: 8px;
+  color: #334255;
+  display: inline-flex;
+  height: 42px;
+  justify-content: center;
+  width: 42px;
+}
+
+.document-main strong {
+  color: #16202b;
+  display: block;
+  font-size: 14px;
+}
+
+.document-main p,
+.document-type,
+.document-date,
+.document-size {
+  color: #667383;
+  font-size: 13px;
+}
+
+.document-main p {
+  margin: 5px 0 0;
+}
+
 @media (max-width: 1180px) {
   .login-shell {
     grid-template-columns: 1fr;
@@ -829,12 +1083,25 @@ h2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .admin-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .main-grid {
     grid-template-columns: 1fr;
   }
 
   .insight-rail {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .document-row {
+    grid-template-columns: 42px minmax(220px, 1fr) 120px 110px 42px;
+  }
+
+  .document-size,
+  .document-row .status-badge {
+    display: none;
   }
 }
 
@@ -860,12 +1127,12 @@ h2 {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
-  .nav-list a {
+  .nav-list button {
     justify-content: center;
     padding: 0 8px;
   }
 
-  .nav-list a span {
+  .nav-list button span {
     display: none;
   }
 
@@ -894,6 +1161,24 @@ h2 {
   .case-row {
     grid-template-columns: 1fr 1fr;
   }
+
+  .admin-hero {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .document-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .document-row {
+    grid-template-columns: 42px minmax(0, 1fr) 42px;
+  }
+
+  .document-type,
+  .document-date {
+    display: none;
+  }
 }
 
 @media (max-width: 640px) {
@@ -920,6 +1205,7 @@ h2 {
   }
 
   .metric-grid,
+  .admin-grid,
   .insight-rail,
   .case-row {
     grid-template-columns: 1fr;

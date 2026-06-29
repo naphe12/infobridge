@@ -43,6 +43,7 @@ class UserRole(str, enum.Enum):
     AGENT = "AGENT"
     VALIDATOR = "VALIDATOR"
     OBSERVER = "OBSERVER"
+    AUDITOR = "AUDITOR"
 
 
 class UserStatus(str, enum.Enum):
@@ -55,9 +56,13 @@ class CaseStatus(str, enum.Enum):
     DRAFT = "DRAFT"
     SENT = "SENT"
     RECEIVED = "RECEIVED"
+    ASSIGNED = "ASSIGNED"
     IN_REVIEW = "IN_REVIEW"
+    IN_PROGRESS = "IN_PROGRESS"
+    PENDING_VALIDATION = "PENDING_VALIDATION"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+    RESPONSE_SENT = "RESPONSE_SENT"
     CLOSED = "CLOSED"
     ARCHIVED = "ARCHIVED"
 
@@ -89,4 +94,3 @@ class SecuritySeverity(str, enum.Enum):
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
     CRITICAL = "CRITICAL"
-

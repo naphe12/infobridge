@@ -6,6 +6,8 @@ class Settings(BaseSettings):
     api_cors_origins: str = "http://localhost:5173"
     secret_key: str = "change-me-in-production"
     access_token_expire_minutes: int = 15
+    document_storage_path: str = "storage/documents"
+    document_encryption_key: str | None = None
 
     model_config = SettingsConfigDict(env_file="../.env", env_file_encoding="utf-8", extra="ignore")
 
@@ -15,4 +17,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-
