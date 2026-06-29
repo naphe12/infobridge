@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://infobridge:infobridge_dev_password@localhost:5432/infobridge"
-    api_cors_origins: str = "http://localhost:5173"
+    api_cors_origins: str = "http://localhost:5173,https://infobridge-frontend-production.up.railway.app"
     secret_key: str = "change-me-in-production"
     access_token_expire_minutes: int = 15
     document_storage_path: str = "storage/documents"
