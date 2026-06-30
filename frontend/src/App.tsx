@@ -808,7 +808,7 @@ export function App() {
           </div>
         </header>
 
-        <QuickAccessPanel activeFeature={activeFeature} isAdmin={userRole === "admin"} onOpenFeature={openFeature} />
+        <QuickAccessPanel isAdmin={userRole === "admin"} onOpenFeature={openFeature} />
 
         {activeSection === "overview" ? <Overview metrics={metrics} /> : null}
         {appMessage ? <p className="app-message">{appMessage}</p> : null}
@@ -850,11 +850,9 @@ export function App() {
 }
 
 function QuickAccessPanel({
-  activeFeature,
   isAdmin,
   onOpenFeature,
 }: {
-  activeFeature: FeatureKey | null;
   isAdmin: boolean;
   onOpenFeature: (feature: FeatureKey) => void;
 }) {
@@ -864,10 +862,6 @@ function QuickAccessPanel({
 
   return (
     <section className="quick-access-panel" aria-label="Accès rapides">
-      <div className="quick-access-heading">
-        <span className="section-label">Accès rapides</span>
-        <h2>{activeFeature ? getFeatureTitle(activeFeature) : "Fonctions principales"}</h2>
-      </div>
       <div className="quick-access-grid">
         {groups.map((group) => {
           const Icon = group.icon;

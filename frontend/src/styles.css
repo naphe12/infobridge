@@ -607,25 +607,17 @@ h2 {
 }
 
 .quick-access-panel {
-  align-items: center;
   background: #ffffff;
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: var(--shadow);
-  display: grid;
-  gap: 16px;
-  grid-template-columns: minmax(170px, 0.6fr) minmax(0, 1fr);
   padding: 14px;
-}
-
-.quick-access-heading h2 {
-  margin: 0;
 }
 
 .quick-access-grid {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .quick-access-card {
@@ -1564,11 +1556,6 @@ h2 {
   }
 
   .admin-quick-panel {
-    align-items: stretch;
-    grid-template-columns: 1fr;
-  }
-
-  .quick-access-panel {
     align-items: stretch;
     grid-template-columns: 1fr;
   }
