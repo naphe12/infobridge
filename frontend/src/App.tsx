@@ -546,6 +546,11 @@ export function App() {
           <span>InfoBridge</span>
         </div>
 
+        <button className="danger-logout-button" onClick={handleLogout} type="button">
+          <LogOut size={18} />
+          Se déconnecter
+        </button>
+
         <nav className="nav-list">
           {getVisibleNavItems(userRole).map((item) => {
             const Icon = item.icon;
@@ -591,10 +596,6 @@ export function App() {
             <button className="primary-button" type="button">
               {activeSection === "documents" ? <UploadCloud size={18} /> : <FilePlus2 size={18} />}
               {activeSection === "documents" ? "Déposer un document" : "Nouveau dossier"}
-            </button>
-            <button className="ghost-button logout-button" onClick={handleLogout} type="button">
-              <LogOut size={18} />
-              Se déconnecter
             </button>
           </div>
         </header>

@@ -61,6 +61,25 @@ button {
   width: 38px;
 }
 
+.danger-logout-button {
+  align-items: center;
+  background: #b42318;
+  border: 1px solid #d13b30;
+  border-radius: 8px;
+  color: #ffffff;
+  display: inline-flex;
+  font-weight: 900;
+  gap: 9px;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 12px;
+  width: 100%;
+}
+
+.danger-logout-button:hover {
+  background: #9f1f16;
+}
+
 .nav-list {
   display: grid;
   gap: 6px;
@@ -528,10 +547,6 @@ h2 {
   flex: 0 0 auto;
   padding: 0;
   width: 42px;
-}
-
-.logout-button {
-  white-space: nowrap;
 }
 
 .metric-grid {
