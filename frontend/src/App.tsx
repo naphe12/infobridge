@@ -41,6 +41,8 @@ type Dashboard = {
   users: number;
   cases: number;
   security_events: number;
+  closed_cases?: number;
+  response_rate?: number;
 };
 
 type CaseItem = {
@@ -72,45 +74,50 @@ type LoginResponse = {
   user: AuthUser;
 };
 
-type DocumentItem = {
-  title: string;
-  reference: string;
-  institution: string;
-  classification: "Interne" | "Confidentiel" | "Secret";
+type Institution = {
+  id: string;
+  name: string;
+  code: string;
   type: string;
-  updatedAt: string;
-  size: string;
+  status: string;
 };
 
-const documents: DocumentItem[] = [
-  {
-    title: "Décision de validation institutionnelle",
-    reference: "DOC-2026-118",
-    institution: "Banque Centrale",
-    classification: "Confidentiel",
-    type: "PDF signé",
-    updatedAt: "29/06/2026",
-    size: "1.8 Mo",
-  },
-  {
-    title: "Pièces justificatives consolidées",
-    reference: "DOC-2026-117",
-    institution: "Commune de Bujumbura",
-    classification: "Interne",
-    type: "Archive ZIP",
-    updatedAt: "28/06/2026",
-    size: "8.4 Mo",
-  },
-  {
-    title: "Rapport de rapprochement documentaire",
-    reference: "DOC-2026-116",
-    institution: "Ministère de la Justice",
-    classification: "Secret",
-    type: "PDF chiffré",
-    updatedAt: "27/06/2026",
-    size: "2.2 Mo",
-  },
-];
+type PlatformUser = {
+  id: string;
+  institution_id: string;
+  full_name: string;
+  email: string;
+  role: AuthUser["role"];
+  status: string;
+  mfa_enabled: boolean;
+};
+
+type ExchangeCase = {
+  id: string;
+  reference: string;
+  subject: string;
+  description: string | null;
+  sender_institution_id: string;
+  receiver_institution_id: string;
+  status: string;
+  priority: string;
+  classification: string;
+  assigned_to: string | null;
+  due_at: string | null;
+  created_at: string;
+};
+
+type Attachment = {
+  id: string;
+  case_id: string | null;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  checksum: string;
+  purpose: string;
+  encrypted: boolean;
+  uploaded_at: string;
+};
 
 const cases: CaseItem[] = [
   {
@@ -213,6 +220,11 @@ export function App() {
   );
   const [loginError, setLoginError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [appMessage, setAppMessage] = useState("");
+  const [institutions, setInstitutions] = useState<Institution[]>([]);
+  const [users, setUsers] = useState<PlatformUser[]>([]);
+  const [exchangeCases, setExchangeCases] = useState<ExchangeCase[]>([]);
+  const [attachmentsByCase, setAttachmentsByCase] = useState<Record<string, Attachment[]>>({});
   const [dashboard, setDashboard] = useState<Dashboard>({
     institutions: 0,
     users: 0,
@@ -225,27 +237,51 @@ export function App() {
       return;
     }
 
-    fetch(`${apiUrl}/dashboard`, {
+    void loadWorkspaceData();
+  }, [accessToken, isAuthenticated, userRole]);
+
+  async function apiFetch<T>(path: string, init: RequestInit = {}) {
+    const response = await fetch(`${apiUrl}${path}`, {
+      ...init,
       headers: {
         Authorization: `Bearer ${accessToken}`,
+        ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+        ...init.headers,
       },
-    })
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error("Dashboard request failed");
-        }
-        return response.json() as Promise<Dashboard>;
-      })
-      .then(setDashboard)
-      .catch(() => {
-        setDashboard({
-          institutions: 0,
-          users: 0,
-          cases: 0,
-          security_events: 0,
-        });
-      });
-  }, [accessToken, isAuthenticated]);
+    });
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+      throw new Error(payload?.detail ?? `Erreur API ${response.status}`);
+    }
+
+    return (await response.json()) as T;
+  }
+
+  async function loadWorkspaceData() {
+    try {
+      const [dashboardData, caseData, institutionData] = await Promise.all([
+        apiFetch<Dashboard>("/dashboard"),
+        apiFetch<ExchangeCase[]>("/cases"),
+        apiFetch<Institution[]>("/institutions"),
+      ]);
+
+      setDashboard(dashboardData);
+      setExchangeCases(caseData);
+      setInstitutions(institutionData);
+
+      if (userRole === "admin") {
+        setUsers(await apiFetch<PlatformUser[]>("/users"));
+      }
+
+      const attachmentPairs = await Promise.all(
+        caseData.map(async (item) => [item.id, await apiFetch<Attachment[]>(`/cases/${item.id}/attachments`)] as const),
+      );
+      setAttachmentsByCase(Object.fromEntries(attachmentPairs));
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Impossible de charger les données.");
+    }
+  }
 
   const metrics = useMemo(
     () => [
@@ -321,8 +357,78 @@ export function App() {
       setActiveSection(role === "admin" ? "admin" : "documents");
       setLoginError("");
       setIsAuthenticated(true);
+      setAppMessage("");
     } catch {
       setLoginError(`API injoignable. Vérifiez VITE_API_URL: ${apiUrl}`);
+    }
+  }
+
+  async function handleCreateCase(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!currentUser) {
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const file = formData.get("file");
+    const payload = {
+      reference: String(formData.get("reference") ?? "").trim(),
+      subject: String(formData.get("subject") ?? "").trim(),
+      description: String(formData.get("description") ?? "").trim() || null,
+      sender_institution_id: currentUser.institution_id,
+      receiver_institution_id: String(formData.get("receiver_institution_id") ?? ""),
+      priority: String(formData.get("priority") ?? "NORMAL"),
+      classification: String(formData.get("classification") ?? "INTERNE"),
+    };
+
+    try {
+      const createdCase = await apiFetch<ExchangeCase>("/cases", {
+        body: JSON.stringify(payload),
+        method: "POST",
+      });
+
+      if (file instanceof File && file.size > 0) {
+        const upload = new FormData();
+        upload.append("file", file);
+        upload.append("purpose", "REQUEST");
+        await apiFetch<Attachment>(`/cases/${createdCase.id}/attachments`, {
+          body: upload,
+          method: "POST",
+        });
+      }
+
+      event.currentTarget.reset();
+      setAppMessage(`Demande ${createdCase.reference} créée avec succès.`);
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Création impossible.");
+    }
+  }
+
+  async function handleUploadAttachment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const caseId = String(formData.get("case_id") ?? "");
+    const file = formData.get("file");
+
+    if (!(file instanceof File) || file.size === 0 || !caseId) {
+      setAppMessage("Sélectionnez une demande et un fichier.");
+      return;
+    }
+
+    try {
+      const upload = new FormData();
+      upload.append("file", file);
+      upload.append("purpose", "RESPONSE");
+      await apiFetch<Attachment>(`/cases/${caseId}/attachments`, {
+        body: upload,
+        method: "POST",
+      });
+      event.currentTarget.reset();
+      setAppMessage("Pièce jointe chiffrée téléversée.");
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Téléversement impossible.");
     }
   }
 
@@ -493,8 +599,20 @@ export function App() {
         </header>
 
         {activeSection === "overview" ? <Overview metrics={metrics} /> : null}
-        {activeSection === "admin" ? <AdminWorkspace dashboard={dashboard} /> : null}
-        {activeSection === "documents" ? <DocumentsWorkspace /> : null}
+        {appMessage ? <p className="app-message">{appMessage}</p> : null}
+        {activeSection === "admin" ? (
+          <AdminWorkspace dashboard={dashboard} institutions={institutions} users={users} />
+        ) : null}
+        {activeSection === "documents" ? (
+          <DocumentsWorkspace
+            attachmentsByCase={attachmentsByCase}
+            currentUser={currentUser}
+            exchangeCases={exchangeCases}
+            institutions={institutions}
+            onCreateCase={handleCreateCase}
+            onUploadAttachment={handleUploadAttachment}
+          />
+        ) : null}
       </section>
     </main>
   );
@@ -523,7 +641,22 @@ function Overview({ metrics }: { metrics: Array<{ icon: typeof Building2; label:
   );
 }
 
-function AdminWorkspace({ dashboard }: { dashboard: Dashboard }) {
+function AdminWorkspace({
+  dashboard,
+  institutions,
+  users,
+}: {
+  dashboard: Dashboard;
+  institutions: Institution[];
+  users: PlatformUser[];
+}) {
+  const moduleValues: Record<string, string> = {
+    Institutions: `${institutions.length || dashboard.institutions} actives`,
+    "Utilisateurs et rôles": `${users.length || dashboard.users} comptes`,
+    "Sécurité d'accès": "MFA disponible",
+    Référentiels: "Classifications",
+  };
+
   return (
     <section className="admin-layout">
       <div className="admin-hero">
@@ -548,10 +681,41 @@ function AdminWorkspace({ dashboard }: { dashboard: Dashboard }) {
               </div>
               <strong>{module.title}</strong>
               <p>{module.description}</p>
-              <span>{module.value}</span>
+              <span>{moduleValues[module.title] ?? module.value}</span>
             </article>
           );
         })}
+      </section>
+
+      <section className="settings-panel">
+        <div className="panel-toolbar">
+          <div>
+            <h2>Utilisateurs</h2>
+            <p>Comptes enregistrés et profils d'accès</p>
+          </div>
+          <button className="ghost-button" type="button">
+            <Users size={17} />
+            Nouveau compte
+          </button>
+        </div>
+
+        <div className="user-list">
+          {users.length ? (
+            users.map((user) => (
+              <div className="user-row" key={user.id}>
+                <span>{initials(user.full_name)}</span>
+                <div>
+                  <strong>{user.full_name}</strong>
+                  <p>{user.email}</p>
+                </div>
+                <StatusPill label={formatRole(user.role)} />
+                <small>{user.status}</small>
+              </div>
+            ))
+          ) : (
+            <p className="empty-state">Aucun utilisateur chargé.</p>
+          )}
+        </div>
       </section>
 
       <section className="settings-panel">
@@ -577,29 +741,123 @@ function AdminWorkspace({ dashboard }: { dashboard: Dashboard }) {
   );
 }
 
-function DocumentsWorkspace() {
+function DocumentsWorkspace({
+  attachmentsByCase,
+  currentUser,
+  exchangeCases,
+  institutions,
+  onCreateCase,
+  onUploadAttachment,
+}: {
+  attachmentsByCase: Record<string, Attachment[]>;
+  currentUser: AuthUser | null;
+  exchangeCases: ExchangeCase[];
+  institutions: Institution[];
+  onCreateCase: (event: FormEvent<HTMLFormElement>) => void;
+  onUploadAttachment: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const currentInstitution = institutions.find((institution) => institution.id === currentUser?.institution_id);
+  const receivers = institutions.filter((institution) => institution.id !== currentUser?.institution_id);
+  const availableReceivers = receivers.length ? receivers : institutions;
+
   return (
     <section className="documents-layout">
-      <div className="document-tools">
-        <label className="document-search">
-          <Search size={18} />
-          <input aria-label="Rechercher un document" placeholder="Référence, titre, institution..." type="search" />
-        </label>
-        <button className="ghost-button" type="button">
-          <SlidersHorizontal size={17} />
-          Classifications
-        </button>
-        <button className="primary-button" type="button">
-          <UploadCloud size={18} />
-          Déposer
-        </button>
-      </div>
+      <section className="request-form-panel">
+        <div className="panel-toolbar">
+          <div>
+            <h2>Nouvelle demande d'information</h2>
+            <p>{currentInstitution ? `Institution émettrice: ${currentInstitution.name}` : "Institution émettrice du compte connecté"}</p>
+          </div>
+        </div>
+
+        <form className="request-form" onSubmit={onCreateCase}>
+          <label>
+            <span>Référence</span>
+            <input name="reference" placeholder="IB-2026-0050" required />
+          </label>
+          <label>
+            <span>Objet</span>
+            <input name="subject" placeholder="Objet de la demande" required />
+          </label>
+          <label>
+            <span>Institution destinataire</span>
+            <select name="receiver_institution_id" required>
+              <option value="">Sélectionner</option>
+              {availableReceivers.map((institution) => (
+                <option key={institution.id} value={institution.id}>
+                  {institution.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Classification</span>
+            <select name="classification">
+              <option value="INTERNE">Interne</option>
+              <option value="CONFIDENTIEL">Confidentiel</option>
+              <option value="SECRET">Secret</option>
+              <option value="PUBLIC">Public</option>
+            </select>
+          </label>
+          <label>
+            <span>Priorité</span>
+            <select name="priority">
+              <option value="NORMAL">Normale</option>
+              <option value="HIGH">Haute</option>
+              <option value="URGENT">Urgente</option>
+              <option value="LOW">Basse</option>
+            </select>
+          </label>
+          <label className="wide-field">
+            <span>Description</span>
+            <textarea name="description" placeholder="Contexte, informations demandées, contraintes de délai..." />
+          </label>
+          <label className="wide-field">
+            <span>Pièce jointe initiale</span>
+            <input name="file" type="file" />
+          </label>
+          <button className="primary-button" type="submit">
+            <FilePlus2 size={18} />
+            Créer la demande
+          </button>
+        </form>
+      </section>
+
+      <section className="request-form-panel">
+        <div className="panel-toolbar">
+          <div>
+            <h2>Ajouter une pièce à un dossier</h2>
+            <p>Le fichier est chiffré au stockage et journalisé.</p>
+          </div>
+        </div>
+        <form className="request-form compact-form" onSubmit={onUploadAttachment}>
+          <label>
+            <span>Dossier</span>
+            <select name="case_id" required>
+              <option value="">Sélectionner</option>
+              {exchangeCases.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.reference} - {item.subject}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Fichier</span>
+            <input name="file" required type="file" />
+          </label>
+          <button className="primary-button" type="submit">
+            <UploadCloud size={18} />
+            Téléverser
+          </button>
+        </form>
+      </section>
 
       <section className="document-panel">
         <div className="panel-toolbar">
           <div>
-            <h2>Consultation documentaire</h2>
-            <p>Accès contrôlé aux documents transmis et validés</p>
+            <h2>Dossiers et documents</h2>
+            <p>Accès contrôlé aux demandes et pièces téléversées</p>
           </div>
           <button aria-label="Options documents" className="icon-button" type="button">
             <MoreHorizontal size={18} />
@@ -607,26 +865,39 @@ function DocumentsWorkspace() {
         </div>
 
         <div className="document-list">
-          {documents.map((document) => (
-            <article className="document-row" key={document.reference}>
+          {exchangeCases.length ? (
+            exchangeCases.map((item) => {
+              const caseAttachments = attachmentsByCase[item.id] ?? [];
+              const sender = institutions.find((institution) => institution.id === item.sender_institution_id);
+              const receiver = institutions.find((institution) => institution.id === item.receiver_institution_id);
+
+              return (
+            <article className="document-row" key={item.id}>
               <div className="document-icon">
                 <FileText size={21} />
               </div>
               <div className="document-main">
-                <strong>{document.title}</strong>
+                <strong>{item.subject}</strong>
                 <p>
-                  {document.reference} · {document.institution}
+                  {item.reference} · {sender?.name ?? "Institution"} vers {receiver?.name ?? "Institution"}
                 </p>
+                {caseAttachments.length ? (
+                  <small>{caseAttachments.map((attachment) => attachment.file_name).join(", ")}</small>
+                ) : null}
               </div>
-              <span className="document-type">{document.type}</span>
-              <span className="document-date">{document.updatedAt}</span>
-              <span className="document-size">{document.size}</span>
-              <StatusPill label={document.classification} />
-              <button className="icon-button" type="button" aria-label={`Télécharger ${document.title}`}>
+              <span className="document-type">{formatStatus(item.status)}</span>
+              <span className="document-date">{formatDate(item.created_at)}</span>
+              <span className="document-size">{caseAttachments.length} pièce(s)</span>
+              <StatusPill label={formatClassification(item.classification)} />
+              <button className="icon-button" type="button" aria-label={`Consulter ${item.reference}`}>
                 <Download size={18} />
               </button>
             </article>
-          ))}
+              );
+            })
+          ) : (
+            <p className="empty-state">Aucune demande disponible pour ce profil.</p>
+          )}
         </div>
       </section>
     </section>
@@ -775,14 +1046,21 @@ function SettingRow({ label, value, tone = "neutral" }: { label: string; value: 
   );
 }
 
-function StatusPill({ label }: { label: DocumentItem["classification"] }) {
-  const tone: Record<DocumentItem["classification"], string> = {
+function StatusPill({ label }: { label: string }) {
+  const tone: Record<string, string> = {
     Interne: "received",
     Confidentiel: "review",
     Secret: "urgent",
+    Public: "approved",
+    "Admin système": "urgent",
+    "Admin institution": "review",
+    Agent: "approved",
+    Validateur: "review",
+    Observateur: "received",
+    Auditeur: "urgent",
   };
 
-  return <span className={`status-badge ${tone[label]}`}>{label}</span>;
+  return <span className={`status-badge ${tone[label] ?? "received"}`}>{label}</span>;
 }
 
 function StatusBadge({ status }: { status: CaseItem["status"] }) {
@@ -816,6 +1094,53 @@ function getVisibleNavItems(role: UserRole) {
 
 function isAdminRole(role: AuthUser["role"]) {
   return role === "SYSTEM_ADMIN" || role === "INSTITUTION_ADMIN";
+}
+
+function formatClassification(classification: string) {
+  const labels: Record<string, string> = {
+    CONFIDENTIEL: "Confidentiel",
+    INTERNE: "Interne",
+    PUBLIC: "Public",
+    SECRET: "Secret",
+  };
+
+  return labels[classification] ?? classification;
+}
+
+function formatRole(role: AuthUser["role"]) {
+  const labels: Record<AuthUser["role"], string> = {
+    AGENT: "Agent",
+    AUDITOR: "Auditeur",
+    INSTITUTION_ADMIN: "Admin institution",
+    OBSERVER: "Observateur",
+    SYSTEM_ADMIN: "Admin système",
+    VALIDATOR: "Validateur",
+  };
+
+  return labels[role];
+}
+
+function formatStatus(status: string) {
+  const labels: Record<string, string> = {
+    APPROVED: "Validée",
+    ARCHIVED: "Archivée",
+    ASSIGNED: "Affectée",
+    CLOSED: "Clôturée",
+    DRAFT: "Brouillon",
+    IN_PROGRESS: "Traitement",
+    IN_REVIEW: "En revue",
+    PENDING_VALIDATION: "Validation",
+    RECEIVED: "Reçue",
+    REJECTED: "Rejetée",
+    RESPONSE_SENT: "Réponse envoyée",
+    SENT: "Transmise",
+  };
+
+  return labels[status] ?? status;
+}
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("fr-FR", { dateStyle: "short" }).format(new Date(value));
 }
 
 function initials(name: string) {

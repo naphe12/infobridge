@@ -401,6 +401,17 @@ button {
   width: 100%;
 }
 
+.app-message {
+  background: #e7f3ff;
+  border: 1px solid #b8d7f0;
+  border-radius: 8px;
+  color: #2368a0;
+  font-size: 13px;
+  font-weight: 800;
+  margin: 0;
+  padding: 11px 13px;
+}
+
 .workspace {
   display: grid;
   gap: 20px;
@@ -578,6 +589,7 @@ h2 {
 
 .case-panel,
 .document-panel,
+.request-form-panel,
 .security-card,
 .settings-panel,
 .rail-section {
@@ -963,6 +975,49 @@ h2 {
   display: grid;
 }
 
+.user-list {
+  display: grid;
+}
+
+.user-row {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 38px minmax(0, 1fr) auto auto;
+  min-height: 68px;
+  padding: 12px 17px;
+}
+
+.user-row + .user-row {
+  border-top: 1px solid #edf1f4;
+}
+
+.user-row > span {
+  align-items: center;
+  background: #ecedef;
+  border-radius: 999px;
+  color: #263445;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 900;
+  height: 36px;
+  justify-content: center;
+  width: 36px;
+}
+
+.user-row strong {
+  color: #16202b;
+  display: block;
+  font-size: 14px;
+}
+
+.user-row p,
+.user-row small {
+  color: #667383;
+  font-size: 12px;
+  margin: 3px 0 0;
+}
+
 .setting-row {
   align-items: center;
   display: flex;
@@ -998,6 +1053,62 @@ h2 {
   display: grid;
   gap: 10px;
   grid-template-columns: minmax(260px, 1fr) auto auto;
+}
+
+.request-form {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 17px;
+}
+
+.request-form.compact-form {
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
+}
+
+.request-form label {
+  display: grid;
+  gap: 7px;
+}
+
+.request-form label span {
+  color: #3a4654;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.request-form input,
+.request-form select,
+.request-form textarea {
+  background: #ffffff;
+  border: 1px solid #cfd8e2;
+  border-radius: 8px;
+  color: #1b2430;
+  min-height: 42px;
+  outline: 0;
+  padding: 0 11px;
+  width: 100%;
+}
+
+.request-form textarea {
+  min-height: 94px;
+  padding: 10px 11px;
+  resize: vertical;
+}
+
+.request-form input:focus,
+.request-form select:focus,
+.request-form textarea:focus {
+  border-color: #176b5d;
+  box-shadow: 0 0 0 3px rgba(23, 107, 93, 0.12);
+}
+
+.request-form .wide-field {
+  grid-column: span 3;
+}
+
+.request-form .primary-button {
+  align-self: end;
 }
 
 .document-search {
@@ -1055,6 +1166,7 @@ h2 {
 }
 
 .document-main p,
+.document-main small,
 .document-type,
 .document-date,
 .document-size {
@@ -1062,8 +1174,17 @@ h2 {
   font-size: 13px;
 }
 
-.document-main p {
+.document-main p,
+.document-main small {
+  display: block;
   margin: 5px 0 0;
+}
+
+.empty-state {
+  color: #667383;
+  font-size: 14px;
+  margin: 0;
+  padding: 17px;
 }
 
 @media (max-width: 1180px) {
@@ -1085,6 +1206,15 @@ h2 {
 
   .admin-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .request-form,
+  .request-form.compact-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .request-form .wide-field {
+    grid-column: span 2;
   }
 
   .main-grid {
@@ -1169,6 +1299,16 @@ h2 {
 
   .document-tools {
     grid-template-columns: 1fr;
+  }
+
+  .request-form,
+  .request-form.compact-form,
+  .user-row {
+    grid-template-columns: 1fr;
+  }
+
+  .request-form .wide-field {
+    grid-column: span 1;
   }
 
   .document-row {
