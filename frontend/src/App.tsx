@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   ChevronDown,
   Clock3,
-  Database,
   Download,
   Eye,
   EyeOff,
@@ -16,7 +15,6 @@ import {
   FilePlus2,
   Fingerprint,
   Inbox,
-  KeyRound,
   LayoutDashboard,
   LockKeyhole,
   LogIn,
@@ -184,33 +182,6 @@ const navItems = [
   { id: "admin", label: "Administration", icon: Settings },
   { id: "documents", label: "Documents", icon: FileText },
 ] satisfies Array<{ id: AppSection; label: string; icon: typeof LayoutDashboard }>;
-
-const adminModules = [
-  {
-    icon: Building2,
-    title: "Institutions",
-    description: "Créer, suspendre et vérifier les organismes connectés.",
-    value: "12 actives",
-  },
-  {
-    icon: Users,
-    title: "Utilisateurs et rôles",
-    description: "Attribuer les profils administrateur, agent et observateur.",
-    value: "48 comptes",
-  },
-  {
-    icon: KeyRound,
-    title: "Sécurité d'accès",
-    description: "Suivre MFA, verrouillages et politiques de session.",
-    value: "92% MFA",
-  },
-  {
-    icon: Database,
-    title: "Référentiels",
-    description: "Administrer classifications, statuts et paramètres métier.",
-    value: "9 listes",
-  },
-];
 
 export function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(() => sessionStorage.getItem("infobridge_session") === "active");
@@ -835,51 +806,32 @@ function AdminWorkspace({
   onOpenAdminDraft: (draft: AdminDraft) => void;
   users: PlatformUser[];
 }) {
-  const moduleValues: Record<string, string> = {
-    Institutions: `${institutions.length || dashboard.institutions} actives`,
-    "Utilisateurs et rôles": `${users.length || dashboard.users} comptes`,
-    "Sécurité d'accès": "MFA disponible",
-    Référentiels: "Classifications",
-  };
-
   return (
     <section className="admin-layout">
-      <div className="admin-hero">
-        <div>
+      <section className="admin-quick-panel">
+        <div className="quick-summary">
           <span className="section-label">Administration plateforme</span>
-          <h2>Pilotage des accès, institutions et paramètres</h2>
-          <p>Centralisez les actions sensibles de gouvernance et gardez une visibilité immédiate sur l'état du système.</p>
+          <h2>Actions rapides</h2>
         </div>
-        <button className="primary-button" onClick={() => onOpenAdminDraft("user")} type="button">
-          <Users size={18} />
-          Inviter un utilisateur
-        </button>
-      </div>
-
-      <section className="admin-grid" aria-label="Modules d'administration">
-        {adminModules.map((module) => {
-          const Icon = module.icon;
-          const draft = module.title === "Institutions" ? "institution" : module.title === "Utilisateurs et rôles" ? "user" : null;
-          return (
-            <button
-              className="admin-module"
-              key={module.title}
-              onClick={() => {
-                if (draft) {
-                  onOpenAdminDraft(draft);
-                }
-              }}
-              type="button"
-            >
-              <div className="admin-module-icon">
-                <Icon size={21} />
-              </div>
-              <strong>{module.title}</strong>
-              <p>{module.description}</p>
-              <span>{moduleValues[module.title] ?? module.value}</span>
-            </button>
-          );
-        })}
+        <div className="quick-actions">
+          <button className="primary-button" onClick={() => onOpenAdminDraft("user")} type="button">
+            <Users size={18} />
+            Nouvel utilisateur
+          </button>
+          <button className="ghost-button" onClick={() => onOpenAdminDraft("institution")} type="button">
+            <Building2 size={18} />
+            Nouvelle institution
+          </button>
+          <button className="ghost-button" type="button">
+            <Settings size={18} />
+            Paramètres
+          </button>
+        </div>
+        <div className="quick-stats" aria-label="Résumé administration">
+          <span>{institutions.length || dashboard.institutions} institutions</span>
+          <span>{users.length || dashboard.users} utilisateurs</span>
+          <span>{dashboard.security_events} alertes</span>
+        </div>
       </section>
 
       {adminDraft ? (

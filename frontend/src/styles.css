@@ -916,86 +916,41 @@ h2 {
   gap: 18px;
 }
 
-.admin-hero {
+.admin-quick-panel {
   align-items: center;
-  background: #202c3a;
-  border-radius: 8px;
-  color: #ffffff;
-  display: flex;
-  gap: 18px;
-  justify-content: space-between;
-  padding: 22px;
-}
-
-.admin-hero .section-label {
-  color: #f1b84b;
-}
-
-.admin-hero h2 {
-  color: #ffffff;
-  font-size: 24px;
-  margin-bottom: 8px;
-}
-
-.admin-hero p {
-  color: #c6d0da;
-  line-height: 1.5;
-  margin-bottom: 0;
-  max-width: 720px;
-}
-
-.admin-grid {
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.admin-module {
   background: #ffffff;
   border: 1px solid #d9e0e7;
   border-radius: 8px;
-  color: inherit;
   display: grid;
-  gap: 10px;
-  justify-items: start;
-  min-height: 184px;
-  padding: 17px;
-  text-align: left;
+  gap: 18px;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  padding: 16px;
 }
 
-.admin-module:hover {
-  border-color: #176b5d;
-  box-shadow: 0 8px 24px rgba(23, 107, 93, 0.1);
-}
-
-.admin-module-icon {
-  align-items: center;
-  background: #e8f3f0;
-  border-radius: 8px;
-  color: #176b5d;
-  display: inline-flex;
-  height: 42px;
-  justify-content: center;
-  width: 42px;
-}
-
-.admin-module strong {
-  color: #16202b;
-  font-size: 15px;
-}
-
-.admin-module p {
-  color: #667383;
-  font-size: 13px;
-  line-height: 1.45;
+.quick-summary h2 {
   margin: 0;
 }
 
-.admin-module span {
-  align-self: end;
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.quick-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.quick-stats span {
+  background: #eef0f3;
+  border-radius: 999px;
   color: #334255;
   font-size: 13px;
   font-weight: 900;
+  padding: 7px 10px;
 }
 
 .settings-list {
@@ -1304,8 +1259,13 @@ h2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .admin-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .admin-quick-panel {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .quick-stats {
+    justify-content: flex-start;
   }
 
   .request-form,
@@ -1453,7 +1413,6 @@ h2 {
   }
 
   .metric-grid,
-  .admin-grid,
   .insight-rail,
   .case-row {
     grid-template-columns: 1fr;
