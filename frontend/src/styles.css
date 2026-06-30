@@ -530,6 +530,10 @@ h2 {
   width: 42px;
 }
 
+.logout-button {
+  white-space: nowrap;
+}
+
 .metric-grid {
   display: grid;
   gap: 14px;

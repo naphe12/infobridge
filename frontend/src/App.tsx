@@ -592,8 +592,9 @@ export function App() {
               {activeSection === "documents" ? <UploadCloud size={18} /> : <FilePlus2 size={18} />}
               {activeSection === "documents" ? "Déposer un document" : "Nouveau dossier"}
             </button>
-            <button className="icon-button" onClick={handleLogout} type="button" aria-label="Se déconnecter">
+            <button className="ghost-button logout-button" onClick={handleLogout} type="button">
               <LogOut size={18} />
+              Se déconnecter
             </button>
           </div>
         </header>
