@@ -119,6 +119,13 @@ type Attachment = {
   uploaded_at: string;
 };
 
+type WorkflowDraft =
+  | { mode: "response"; caseId: string; title: string }
+  | { mode: "validate"; caseId: string; title: string; approved: boolean }
+  | null;
+
+type AdminDraft = "institution" | "user" | null;
+
 const cases: CaseItem[] = [
   {
     reference: "IB-2026-0048",
@@ -225,6 +232,8 @@ export function App() {
   const [users, setUsers] = useState<PlatformUser[]>([]);
   const [exchangeCases, setExchangeCases] = useState<ExchangeCase[]>([]);
   const [attachmentsByCase, setAttachmentsByCase] = useState<Record<string, Attachment[]>>({});
+  const [workflowDraft, setWorkflowDraft] = useState<WorkflowDraft>(null);
+  const [adminDraft, setAdminDraft] = useState<AdminDraft>(null);
   const [dashboard, setDashboard] = useState<Dashboard>({
     institutions: 0,
     users: 0,
@@ -432,6 +441,54 @@ export function App() {
     }
   }
 
+  async function handleCreateInstitution(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const payload = {
+      code: String(formData.get("code") ?? "").trim(),
+      name: String(formData.get("name") ?? "").trim(),
+      type: String(formData.get("type") ?? "AGENCY"),
+    };
+
+    try {
+      const institution = await apiFetch<Institution>("/institutions", {
+        body: JSON.stringify(payload),
+        method: "POST",
+      });
+      event.currentTarget.reset();
+      setAdminDraft(null);
+      setAppMessage(`Institution ${institution.name} créée.`);
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Création institution impossible.");
+    }
+  }
+
+  async function handleCreateUser(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const payload = {
+      email: String(formData.get("email") ?? "").trim(),
+      full_name: String(formData.get("full_name") ?? "").trim(),
+      institution_id: String(formData.get("institution_id") ?? ""),
+      password: String(formData.get("password") ?? ""),
+      role: String(formData.get("role") ?? "AGENT"),
+    };
+
+    try {
+      const user = await apiFetch<PlatformUser>("/users", {
+        body: JSON.stringify(payload),
+        method: "POST",
+      });
+      event.currentTarget.reset();
+      setAdminDraft(null);
+      setAppMessage(`Utilisateur ${user.full_name} créé.`);
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Création utilisateur impossible.");
+    }
+  }
+
   async function handleWorkflowAction(caseId: string, action: "send" | "receive" | "send-response" | "close") {
     try {
       await apiFetch<ExchangeCase>(`/cases/${caseId}/${action}`, {
@@ -462,36 +519,58 @@ export function App() {
     }
   }
 
-  async function handleDraftResponse(caseId: string) {
-    const responseBody = window.prompt("Réponse proposée");
-    if (!responseBody) {
+  function openDraftResponse(caseId: string) {
+    const exchangeCase = exchangeCases.find((item) => item.id === caseId);
+    setWorkflowDraft({
+      caseId,
+      mode: "response",
+      title: exchangeCase ? `Réponse à ${exchangeCase.reference}` : "Réponse proposée",
+    });
+  }
+
+  function openValidation(caseId: string, approved: boolean) {
+    const exchangeCase = exchangeCases.find((item) => item.id === caseId);
+    setWorkflowDraft({
+      approved,
+      caseId,
+      mode: "validate",
+      title: `${approved ? "Valider" : "Rejeter"} ${exchangeCase?.reference ?? "la réponse"}`,
+    });
+  }
+
+  async function handleWorkflowDraftSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!workflowDraft) {
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const body = String(formData.get("body") ?? "").trim();
+
+    if (!body) {
+      setAppMessage("Renseignez le champ avant de confirmer.");
       return;
     }
 
     try {
-      await apiFetch<ExchangeCase>(`/cases/${caseId}/response`, {
-        body: JSON.stringify({ response_body: responseBody }),
-        method: "POST",
-      });
-      setAppMessage("Réponse envoyée en validation.");
+      if (workflowDraft.mode === "response") {
+        await apiFetch<ExchangeCase>(`/cases/${workflowDraft.caseId}/response`, {
+          body: JSON.stringify({ response_body: body }),
+          method: "POST",
+        });
+        setAppMessage("Réponse envoyée en validation.");
+      } else {
+        await apiFetch<ExchangeCase>(`/cases/${workflowDraft.caseId}/validate`, {
+          body: JSON.stringify({ approved: workflowDraft.approved, comment: body }),
+          method: "POST",
+        });
+        setAppMessage(workflowDraft.approved ? "Réponse validée." : "Réponse rejetée.");
+      }
+
+      setWorkflowDraft(null);
       await loadWorkspaceData();
     } catch (error) {
-      setAppMessage(error instanceof Error ? error.message : "Rédaction impossible.");
-    }
-  }
-
-  async function handleValidateResponse(caseId: string, approved: boolean) {
-    const comment = window.prompt(approved ? "Commentaire de validation" : "Motif du rejet") ?? "";
-
-    try {
-      await apiFetch<ExchangeCase>(`/cases/${caseId}/validate`, {
-        body: JSON.stringify({ approved, comment }),
-        method: "POST",
-      });
-      setAppMessage(approved ? "Réponse validée." : "Réponse rejetée.");
-      await loadWorkspaceData();
-    } catch (error) {
-      setAppMessage(error instanceof Error ? error.message : "Validation impossible.");
+      setAppMessage(error instanceof Error ? error.message : "Action impossible.");
     }
   }
 
@@ -656,9 +735,23 @@ export function App() {
             <button aria-label="Notifications" className="icon-button" type="button">
               <Bell size={18} />
             </button>
-            <button className="primary-button" type="button">
-              {activeSection === "documents" ? <UploadCloud size={18} /> : <FilePlus2 size={18} />}
-              {activeSection === "documents" ? "Déposer un document" : "Nouveau dossier"}
+            <button
+              className="primary-button"
+              onClick={() => {
+                if (activeSection === "admin") {
+                  setAdminDraft("user");
+                  return;
+                }
+                setActiveSection("documents");
+              }}
+              type="button"
+            >
+              {activeSection === "documents" ? <UploadCloud size={18} /> : activeSection === "admin" ? <Users size={18} /> : <FilePlus2 size={18} />}
+              {activeSection === "documents"
+                ? "Déposer un document"
+                : activeSection === "admin"
+                  ? "Nouvel utilisateur"
+                  : "Nouveau dossier"}
             </button>
           </div>
         </header>
@@ -666,7 +759,16 @@ export function App() {
         {activeSection === "overview" ? <Overview metrics={metrics} /> : null}
         {appMessage ? <p className="app-message">{appMessage}</p> : null}
         {activeSection === "admin" ? (
-          <AdminWorkspace dashboard={dashboard} institutions={institutions} users={users} />
+          <AdminWorkspace
+            adminDraft={adminDraft}
+            dashboard={dashboard}
+            institutions={institutions}
+            onCancelAdminDraft={() => setAdminDraft(null)}
+            onCreateInstitution={handleCreateInstitution}
+            onCreateUser={handleCreateUser}
+            onOpenAdminDraft={setAdminDraft}
+            users={users}
+          />
         ) : null}
         {activeSection === "documents" ? (
           <DocumentsWorkspace
@@ -676,11 +778,14 @@ export function App() {
             institutions={institutions}
             onAssignCase={handleAssignCase}
             onCreateCase={handleCreateCase}
-            onDraftResponse={handleDraftResponse}
+            onDraftResponse={openDraftResponse}
             onUploadAttachment={handleUploadAttachment}
-            onValidateResponse={handleValidateResponse}
+            onValidateResponse={openValidation}
             onWorkflowAction={handleWorkflowAction}
+            onWorkflowDraftCancel={() => setWorkflowDraft(null)}
+            onWorkflowDraftSubmit={handleWorkflowDraftSubmit}
             users={users}
+            workflowDraft={workflowDraft}
           />
         ) : null}
       </section>
@@ -712,12 +817,22 @@ function Overview({ metrics }: { metrics: Array<{ icon: typeof Building2; label:
 }
 
 function AdminWorkspace({
+  adminDraft,
   dashboard,
   institutions,
+  onCancelAdminDraft,
+  onCreateInstitution,
+  onCreateUser,
+  onOpenAdminDraft,
   users,
 }: {
+  adminDraft: AdminDraft;
   dashboard: Dashboard;
   institutions: Institution[];
+  onCancelAdminDraft: () => void;
+  onCreateInstitution: (event: FormEvent<HTMLFormElement>) => void;
+  onCreateUser: (event: FormEvent<HTMLFormElement>) => void;
+  onOpenAdminDraft: (draft: AdminDraft) => void;
   users: PlatformUser[];
 }) {
   const moduleValues: Record<string, string> = {
@@ -735,7 +850,7 @@ function AdminWorkspace({
           <h2>Pilotage des accès, institutions et paramètres</h2>
           <p>Centralisez les actions sensibles de gouvernance et gardez une visibilité immédiate sur l'état du système.</p>
         </div>
-        <button className="primary-button" type="button">
+        <button className="primary-button" onClick={() => onOpenAdminDraft("user")} type="button">
           <Users size={18} />
           Inviter un utilisateur
         </button>
@@ -744,18 +859,115 @@ function AdminWorkspace({
       <section className="admin-grid" aria-label="Modules d'administration">
         {adminModules.map((module) => {
           const Icon = module.icon;
+          const draft = module.title === "Institutions" ? "institution" : module.title === "Utilisateurs et rôles" ? "user" : null;
           return (
-            <article className="admin-module" key={module.title}>
+            <button
+              className="admin-module"
+              key={module.title}
+              onClick={() => {
+                if (draft) {
+                  onOpenAdminDraft(draft);
+                }
+              }}
+              type="button"
+            >
               <div className="admin-module-icon">
                 <Icon size={21} />
               </div>
               <strong>{module.title}</strong>
               <p>{module.description}</p>
               <span>{moduleValues[module.title] ?? module.value}</span>
-            </article>
+            </button>
           );
         })}
       </section>
+
+      {adminDraft ? (
+        <section className="settings-panel">
+          <div className="panel-toolbar">
+            <div>
+              <h2>{adminDraft === "institution" ? "Nouvelle institution" : "Nouvel utilisateur"}</h2>
+              <p>
+                {adminDraft === "institution"
+                  ? "Enregistrer une institution participante."
+                  : "Créer un compte et lui attribuer un rôle."}
+              </p>
+            </div>
+            <button className="ghost-button" onClick={onCancelAdminDraft} type="button">
+              Annuler
+            </button>
+          </div>
+
+          {adminDraft === "institution" ? (
+            <form className="request-form admin-form" onSubmit={onCreateInstitution}>
+              <label>
+                <span>Nom</span>
+                <input name="name" placeholder="Ministère, agence, banque..." required />
+              </label>
+              <label>
+                <span>Code</span>
+                <input name="code" placeholder="MINFIN" required />
+              </label>
+              <label>
+                <span>Type</span>
+                <select name="type">
+                  <option value="MINISTRY">Ministère</option>
+                  <option value="BANK">Banque</option>
+                  <option value="COMMUNE">Commune</option>
+                  <option value="AGENCY">Agence</option>
+                  <option value="OPERATOR">Opérateur</option>
+                  <option value="PRIVATE">Privé</option>
+                  <option value="OTHER">Autre</option>
+                </select>
+              </label>
+              <button className="primary-button" type="submit">
+                <Building2 size={18} />
+                Créer institution
+              </button>
+            </form>
+          ) : (
+            <form className="request-form admin-form" onSubmit={onCreateUser}>
+              <label>
+                <span>Nom complet</span>
+                <input name="full_name" placeholder="Nom de l'utilisateur" required />
+              </label>
+              <label>
+                <span>E-mail</span>
+                <input name="email" placeholder="user@institution.bi" required type="email" />
+              </label>
+              <label>
+                <span>Mot de passe initial</span>
+                <input name="password" minLength={12} placeholder="Mot de passe temporaire" required type="password" />
+              </label>
+              <label>
+                <span>Institution</span>
+                <select name="institution_id" required>
+                  <option value="">Sélectionner</option>
+                  {institutions.map((institution) => (
+                    <option key={institution.id} value={institution.id}>
+                      {institution.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Rôle</span>
+                <select name="role">
+                  <option value="AGENT">Agent</option>
+                  <option value="VALIDATOR">Validateur</option>
+                  <option value="OBSERVER">Observateur</option>
+                  <option value="AUDITOR">Auditeur</option>
+                  <option value="INSTITUTION_ADMIN">Admin institution</option>
+                </select>
+              </label>
+              <button className="primary-button" type="submit">
+                <Users size={18} />
+                Créer utilisateur
+              </button>
+            </form>
+          )}
+        </section>
+      ) : null}
 
       <section className="settings-panel">
         <div className="panel-toolbar">
@@ -763,7 +975,7 @@ function AdminWorkspace({
             <h2>Utilisateurs</h2>
             <p>Comptes enregistrés et profils d'accès</p>
           </div>
-          <button className="ghost-button" type="button">
+          <button className="ghost-button" onClick={() => onOpenAdminDraft("user")} type="button">
             <Users size={17} />
             Nouveau compte
           </button>
@@ -822,7 +1034,10 @@ function DocumentsWorkspace({
   onUploadAttachment,
   onValidateResponse,
   onWorkflowAction,
+  onWorkflowDraftCancel,
+  onWorkflowDraftSubmit,
   users,
+  workflowDraft,
 }: {
   attachmentsByCase: Record<string, Attachment[]>;
   currentUser: AuthUser | null;
@@ -834,7 +1049,10 @@ function DocumentsWorkspace({
   onUploadAttachment: (event: FormEvent<HTMLFormElement>) => void;
   onValidateResponse: (caseId: string, approved: boolean) => void;
   onWorkflowAction: (caseId: string, action: "send" | "receive" | "send-response" | "close") => void;
+  onWorkflowDraftCancel: () => void;
+  onWorkflowDraftSubmit: (event: FormEvent<HTMLFormElement>) => void;
   users: PlatformUser[];
+  workflowDraft: WorkflowDraft;
 }) {
   const currentInstitution = institutions.find((institution) => institution.id === currentUser?.institution_id);
   const receivers = institutions.filter((institution) => institution.id !== currentUser?.institution_id);
@@ -943,6 +1161,34 @@ function DocumentsWorkspace({
             <MoreHorizontal size={18} />
           </button>
         </div>
+
+        {workflowDraft ? (
+          <form className="workflow-draft-panel" onSubmit={onWorkflowDraftSubmit}>
+            <div>
+              <h3>{workflowDraft.title}</h3>
+              <p>
+                {workflowDraft.mode === "response"
+                  ? "Rédigez la réponse proposée avant validation hiérarchique."
+                  : workflowDraft.approved
+                    ? "Ajoutez le commentaire de validation."
+                    : "Indiquez le motif du rejet."}
+              </p>
+            </div>
+            <textarea
+              name="body"
+              placeholder={workflowDraft.mode === "response" ? "Réponse proposée..." : "Commentaire..."}
+              required
+            />
+            <div className="workflow-draft-actions">
+              <button className="ghost-button" onClick={onWorkflowDraftCancel} type="button">
+                Annuler
+              </button>
+              <button className="primary-button" type="submit">
+                Confirmer
+              </button>
+            </div>
+          </form>
+        ) : null}
 
         <div className="document-list">
           {exchangeCases.length ? (

@@ -954,10 +954,18 @@ h2 {
   background: #ffffff;
   border: 1px solid #d9e0e7;
   border-radius: 8px;
+  color: inherit;
   display: grid;
   gap: 10px;
+  justify-items: start;
   min-height: 184px;
   padding: 17px;
+  text-align: left;
+}
+
+.admin-module:hover {
+  border-color: #176b5d;
+  box-shadow: 0 8px 24px rgba(23, 107, 93, 0.1);
 }
 
 .admin-module-icon {
@@ -1083,6 +1091,10 @@ h2 {
 
 .request-form.compact-form {
   grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
+}
+
+.request-form.admin-form {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
 }
 
 .request-form label {
@@ -1229,6 +1241,50 @@ h2 {
   font-weight: 800;
   min-height: 34px;
   padding: 0 10px;
+}
+
+.workflow-draft-panel {
+  background: #f7f9fb;
+  border-bottom: 1px solid #e4e9ee;
+  display: grid;
+  gap: 12px;
+  padding: 17px;
+}
+
+.workflow-draft-panel h3 {
+  color: #16202b;
+  font-size: 16px;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.workflow-draft-panel p {
+  color: #667383;
+  font-size: 13px;
+  margin: 5px 0 0;
+}
+
+.workflow-draft-panel textarea {
+  background: #ffffff;
+  border: 1px solid #cfd8e2;
+  border-radius: 8px;
+  color: #1b2430;
+  min-height: 118px;
+  outline: 0;
+  padding: 10px 11px;
+  resize: vertical;
+  width: 100%;
+}
+
+.workflow-draft-panel textarea:focus {
+  border-color: #176b5d;
+  box-shadow: 0 0 0 3px rgba(23, 107, 93, 0.12);
+}
+
+.workflow-draft-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 @media (max-width: 1180px) {
