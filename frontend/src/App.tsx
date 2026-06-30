@@ -972,6 +972,39 @@ function AdminWorkspace({
       <section className="settings-panel">
         <div className="panel-toolbar">
           <div>
+            <h2>Institutions</h2>
+            <p>Organismes autorisés à échanger des demandes et documents</p>
+          </div>
+          <button className="ghost-button" onClick={() => onOpenAdminDraft("institution")} type="button">
+            <Building2 size={17} />
+            Nouvelle institution
+          </button>
+        </div>
+
+        <div className="user-list">
+          {institutions.length ? (
+            institutions.map((institution) => (
+              <div className="user-row" key={institution.id}>
+                <span>{institution.code.slice(0, 2).toUpperCase()}</span>
+                <div>
+                  <strong>{institution.name}</strong>
+                  <p>
+                    {institution.code} · {formatInstitutionType(institution.type)}
+                  </p>
+                </div>
+                <StatusPill label={institution.status === "ACTIVE" ? "Active" : institution.status} />
+                <small>{institution.type}</small>
+              </div>
+            ))
+          ) : (
+            <p className="empty-state">Aucune institution enregistrée.</p>
+          )}
+        </div>
+      </section>
+
+      <section className="settings-panel">
+        <div className="panel-toolbar">
+          <div>
             <h2>Utilisateurs</h2>
             <p>Comptes enregistrés et profils d'accès</p>
           </div>
@@ -1432,6 +1465,7 @@ function StatusPill({ label }: { label: string }) {
     Validateur: "review",
     Observateur: "received",
     Auditeur: "urgent",
+    Active: "approved",
   };
 
   return <span className={`status-badge ${tone[label] ?? "received"}`}>{label}</span>;
@@ -1492,6 +1526,20 @@ function formatRole(role: AuthUser["role"]) {
   };
 
   return labels[role];
+}
+
+function formatInstitutionType(type: string) {
+  const labels: Record<string, string> = {
+    AGENCY: "Agence",
+    BANK: "Banque",
+    COMMUNE: "Commune",
+    MINISTRY: "Ministère",
+    OPERATOR: "Opérateur",
+    OTHER: "Autre",
+    PRIVATE: "Privé",
+  };
+
+  return labels[type] ?? type;
 }
 
 function formatStatus(status: string) {
