@@ -432,6 +432,69 @@ export function App() {
     }
   }
 
+  async function handleWorkflowAction(caseId: string, action: "send" | "receive" | "send-response" | "close") {
+    try {
+      await apiFetch<ExchangeCase>(`/cases/${caseId}/${action}`, {
+        method: "POST",
+      });
+      setAppMessage("Action effectuée avec succès.");
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Action impossible.");
+    }
+  }
+
+  async function handleAssignCase(caseId: string, assignedTo: string) {
+    if (!assignedTo) {
+      setAppMessage("Sélectionnez un utilisateur à affecter.");
+      return;
+    }
+
+    try {
+      await apiFetch<ExchangeCase>(`/cases/${caseId}/assign`, {
+        body: JSON.stringify({ assigned_to: assignedTo }),
+        method: "POST",
+      });
+      setAppMessage("Demande affectée.");
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Affectation impossible.");
+    }
+  }
+
+  async function handleDraftResponse(caseId: string) {
+    const responseBody = window.prompt("Réponse proposée");
+    if (!responseBody) {
+      return;
+    }
+
+    try {
+      await apiFetch<ExchangeCase>(`/cases/${caseId}/response`, {
+        body: JSON.stringify({ response_body: responseBody }),
+        method: "POST",
+      });
+      setAppMessage("Réponse envoyée en validation.");
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Rédaction impossible.");
+    }
+  }
+
+  async function handleValidateResponse(caseId: string, approved: boolean) {
+    const comment = window.prompt(approved ? "Commentaire de validation" : "Motif du rejet") ?? "";
+
+    try {
+      await apiFetch<ExchangeCase>(`/cases/${caseId}/validate`, {
+        body: JSON.stringify({ approved, comment }),
+        method: "POST",
+      });
+      setAppMessage(approved ? "Réponse validée." : "Réponse rejetée.");
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Validation impossible.");
+    }
+  }
+
   function handleLogout() {
     sessionStorage.removeItem("infobridge_session");
     sessionStorage.removeItem("infobridge_token");
@@ -611,8 +674,13 @@ export function App() {
             currentUser={currentUser}
             exchangeCases={exchangeCases}
             institutions={institutions}
+            onAssignCase={handleAssignCase}
             onCreateCase={handleCreateCase}
+            onDraftResponse={handleDraftResponse}
             onUploadAttachment={handleUploadAttachment}
+            onValidateResponse={handleValidateResponse}
+            onWorkflowAction={handleWorkflowAction}
+            users={users}
           />
         ) : null}
       </section>
@@ -748,15 +816,25 @@ function DocumentsWorkspace({
   currentUser,
   exchangeCases,
   institutions,
+  onAssignCase,
   onCreateCase,
+  onDraftResponse,
   onUploadAttachment,
+  onValidateResponse,
+  onWorkflowAction,
+  users,
 }: {
   attachmentsByCase: Record<string, Attachment[]>;
   currentUser: AuthUser | null;
   exchangeCases: ExchangeCase[];
   institutions: Institution[];
+  onAssignCase: (caseId: string, assignedTo: string) => void;
   onCreateCase: (event: FormEvent<HTMLFormElement>) => void;
+  onDraftResponse: (caseId: string) => void;
   onUploadAttachment: (event: FormEvent<HTMLFormElement>) => void;
+  onValidateResponse: (caseId: string, approved: boolean) => void;
+  onWorkflowAction: (caseId: string, action: "send" | "receive" | "send-response" | "close") => void;
+  users: PlatformUser[];
 }) {
   const currentInstitution = institutions.find((institution) => institution.id === currentUser?.institution_id);
   const receivers = institutions.filter((institution) => institution.id !== currentUser?.institution_id);
@@ -872,29 +950,77 @@ function DocumentsWorkspace({
               const caseAttachments = attachmentsByCase[item.id] ?? [];
               const sender = institutions.find((institution) => institution.id === item.sender_institution_id);
               const receiver = institutions.find((institution) => institution.id === item.receiver_institution_id);
+              const canAssign = users.length > 0 && ["RECEIVED", "SENT", "IN_REVIEW"].includes(item.status);
 
               return (
-            <article className="document-row" key={item.id}>
-              <div className="document-icon">
-                <FileText size={21} />
-              </div>
-              <div className="document-main">
-                <strong>{item.subject}</strong>
-                <p>
-                  {item.reference} · {sender?.name ?? "Institution"} vers {receiver?.name ?? "Institution"}
-                </p>
-                {caseAttachments.length ? (
-                  <small>{caseAttachments.map((attachment) => attachment.file_name).join(", ")}</small>
-                ) : null}
-              </div>
-              <span className="document-type">{formatStatus(item.status)}</span>
-              <span className="document-date">{formatDate(item.created_at)}</span>
-              <span className="document-size">{caseAttachments.length} pièce(s)</span>
-              <StatusPill label={formatClassification(item.classification)} />
-              <button className="icon-button" type="button" aria-label={`Consulter ${item.reference}`}>
-                <Download size={18} />
-              </button>
-            </article>
+                <article className="document-row" key={item.id}>
+                  <div className="document-icon">
+                    <FileText size={21} />
+                  </div>
+                  <div className="document-main">
+                    <strong>{item.subject}</strong>
+                    <p>
+                      {item.reference} · {sender?.name ?? "Institution"} vers {receiver?.name ?? "Institution"}
+                    </p>
+                    {caseAttachments.length ? (
+                      <small>{caseAttachments.map((attachment) => attachment.file_name).join(", ")}</small>
+                    ) : null}
+                  </div>
+                  <span className="document-type">{formatStatus(item.status)}</span>
+                  <span className="document-date">{formatDate(item.created_at)}</span>
+                  <span className="document-size">{caseAttachments.length} pièce(s)</span>
+                  <StatusPill label={formatClassification(item.classification)} />
+                  <button className="icon-button" type="button" aria-label={`Consulter ${item.reference}`}>
+                    <Download size={18} />
+                  </button>
+                  <div className="workflow-actions">
+                    {item.status === "DRAFT" ? (
+                      <button className="ghost-button" onClick={() => onWorkflowAction(item.id, "send")} type="button">
+                        Transmettre
+                      </button>
+                    ) : null}
+                    {item.status === "SENT" ? (
+                      <button className="ghost-button" onClick={() => onWorkflowAction(item.id, "receive")} type="button">
+                        Réceptionner
+                      </button>
+                    ) : null}
+                    {canAssign ? (
+                      <select onChange={(event) => onAssignCase(item.id, event.target.value)} defaultValue="">
+                        <option value="">Affecter</option>
+                        {users.map((user) => (
+                          <option key={user.id} value={user.id}>
+                            {user.full_name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
+                    {["ASSIGNED", "IN_PROGRESS", "RECEIVED"].includes(item.status) ? (
+                      <button className="ghost-button" onClick={() => onDraftResponse(item.id)} type="button">
+                        Répondre
+                      </button>
+                    ) : null}
+                    {item.status === "PENDING_VALIDATION" ? (
+                      <>
+                        <button className="ghost-button" onClick={() => onValidateResponse(item.id, true)} type="button">
+                          Valider
+                        </button>
+                        <button className="ghost-button" onClick={() => onValidateResponse(item.id, false)} type="button">
+                          Rejeter
+                        </button>
+                      </>
+                    ) : null}
+                    {item.status === "APPROVED" ? (
+                      <button className="ghost-button" onClick={() => onWorkflowAction(item.id, "send-response")} type="button">
+                        Envoyer réponse
+                      </button>
+                    ) : null}
+                    {item.status === "RESPONSE_SENT" ? (
+                      <button className="ghost-button" onClick={() => onWorkflowAction(item.id, "close")} type="button">
+                        Clôturer
+                      </button>
+                    ) : null}
+                  </div>
+                </article>
               );
             })
           ) : (

@@ -1206,6 +1206,31 @@ h2 {
   padding: 17px;
 }
 
+.workflow-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  grid-column: 2 / -1;
+}
+
+.workflow-actions .ghost-button {
+  font-size: 12px;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.workflow-actions select {
+  background: #ffffff;
+  border: 1px solid #cfd8e2;
+  border-radius: 8px;
+  color: #263445;
+  font-size: 12px;
+  font-weight: 800;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
 @media (max-width: 1180px) {
   .login-shell {
     grid-template-columns: 1fr;
@@ -1246,6 +1271,10 @@ h2 {
 
   .document-row {
     grid-template-columns: 42px minmax(220px, 1fr) 120px 110px 42px;
+  }
+
+  .workflow-actions {
+    grid-column: 2 / -1;
   }
 
   .document-size,
@@ -1332,6 +1361,10 @@ h2 {
 
   .document-row {
     grid-template-columns: 42px minmax(0, 1fr) 42px;
+  }
+
+  .workflow-actions {
+    grid-column: 1 / -1;
   }
 
   .document-type,
