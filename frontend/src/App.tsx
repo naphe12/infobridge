@@ -545,6 +545,17 @@ export function App() {
     }
   }
 
+  function scrollToPanel(panelId: string) {
+    window.requestAnimationFrame(() => {
+      document.getElementById(panelId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
+  function goToPanel(section: AppSection, panelId: string) {
+    setActiveSection(section);
+    window.setTimeout(() => scrollToPanel(panelId), 0);
+  }
+
   function handleLogout() {
     sessionStorage.removeItem("infobridge_session");
     sessionStorage.removeItem("infobridge_token");
@@ -713,7 +724,7 @@ export function App() {
                   setAdminDraft("user");
                   return;
                 }
-                setActiveSection("documents");
+                goToPanel("documents", activeSection === "documents" ? "upload-document-form" : "new-request-form");
               }}
               type="button"
             >
@@ -726,6 +737,15 @@ export function App() {
             </button>
           </div>
         </header>
+
+        {activeSection !== "admin" ? (
+          <QuickAccessPanel
+            activeSection={activeSection}
+            isAdmin={userRole === "admin"}
+            onGoToPanel={goToPanel}
+            onSetSection={setActiveSection}
+          />
+        ) : null}
 
         {activeSection === "overview" ? <Overview metrics={metrics} /> : null}
         {appMessage ? <p className="app-message">{appMessage}</p> : null}
@@ -761,6 +781,98 @@ export function App() {
         ) : null}
       </section>
     </main>
+  );
+}
+
+function QuickAccessPanel({
+  activeSection,
+  isAdmin,
+  onGoToPanel,
+  onSetSection,
+}: {
+  activeSection: AppSection;
+  isAdmin: boolean;
+  onGoToPanel: (section: AppSection, panelId: string) => void;
+  onSetSection: (section: AppSection) => void;
+}) {
+  const actions =
+    activeSection === "documents"
+      ? [
+          {
+            description: "Créer un dossier",
+            icon: FilePlus2,
+            label: "Nouvelle demande",
+            onClick: () => onGoToPanel("documents", "new-request-form"),
+          },
+          {
+            description: "Joindre un fichier",
+            icon: UploadCloud,
+            label: "Téléversement",
+            onClick: () => onGoToPanel("documents", "upload-document-form"),
+          },
+          {
+            description: "Suivre le traitement",
+            icon: Inbox,
+            label: "Dossiers",
+            onClick: () => onGoToPanel("documents", "cases-list-panel"),
+          },
+          {
+            description: "Voir les indicateurs",
+            icon: LayoutDashboard,
+            label: "Tableau de bord",
+            onClick: () => onSetSection("overview"),
+          },
+        ]
+      : [
+          {
+            description: "Saisir une demande",
+            icon: FilePlus2,
+            label: "Nouveau dossier",
+            onClick: () => onGoToPanel("documents", "new-request-form"),
+          },
+          {
+            description: "Ajouter une pièce",
+            icon: UploadCloud,
+            label: "Déposer document",
+            onClick: () => onGoToPanel("documents", "upload-document-form"),
+          },
+          {
+            description: "Consulter les flux",
+            icon: Inbox,
+            label: "Dossiers",
+            onClick: () => onGoToPanel("documents", "cases-list-panel"),
+          },
+          {
+            description: isAdmin ? "Comptes et institutions" : "Mon espace",
+            icon: isAdmin ? Settings : FileText,
+            label: isAdmin ? "Administration" : "Documents",
+            onClick: () => onSetSection(isAdmin ? "admin" : "documents"),
+          },
+        ];
+
+  return (
+    <section className="quick-access-panel" aria-label="Accès rapides">
+      <div className="quick-access-heading">
+        <span className="section-label">Accès rapides</span>
+        <h2>Fonctions principales</h2>
+      </div>
+      <div className="quick-access-grid">
+        {actions.map((action) => {
+          const Icon = action.icon;
+          return (
+            <button className="quick-access-card" key={action.label} onClick={action.onClick} type="button">
+              <span className="quick-access-icon">
+                <Icon size={20} />
+              </span>
+              <span>
+                <strong>{action.label}</strong>
+                <small>{action.description}</small>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -806,6 +918,10 @@ function AdminWorkspace({
   onOpenAdminDraft: (draft: AdminDraft) => void;
   users: PlatformUser[];
 }) {
+  function scrollToAdminPanel(panelId: string) {
+    document.getElementById(panelId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   return (
     <section className="admin-layout">
       <section className="admin-quick-panel">
@@ -822,7 +938,7 @@ function AdminWorkspace({
             <Building2 size={18} />
             Nouvelle institution
           </button>
-          <button className="ghost-button" type="button">
+          <button className="ghost-button" onClick={() => scrollToAdminPanel("admin-governance-panel")} type="button">
             <Settings size={18} />
             Paramètres
           </button>
@@ -921,7 +1037,7 @@ function AdminWorkspace({
         </section>
       ) : null}
 
-      <section className="settings-panel">
+      <section className="settings-panel" id="admin-institutions-panel">
         <div className="panel-toolbar">
           <div>
             <h2>Institutions</h2>
@@ -954,7 +1070,7 @@ function AdminWorkspace({
         </div>
       </section>
 
-      <section className="settings-panel">
+      <section className="settings-panel" id="admin-users-panel">
         <div className="panel-toolbar">
           <div>
             <h2>Utilisateurs</h2>
@@ -985,7 +1101,7 @@ function AdminWorkspace({
         </div>
       </section>
 
-      <section className="settings-panel">
+      <section className="settings-panel" id="admin-governance-panel">
         <div className="panel-toolbar">
           <div>
             <h2>Paramètres de gouvernance</h2>
@@ -1045,7 +1161,7 @@ function DocumentsWorkspace({
 
   return (
     <section className="documents-layout">
-      <section className="request-form-panel">
+      <section className="request-form-panel" id="new-request-form">
         <div className="panel-toolbar">
           <div>
             <h2>Nouvelle demande d'information</h2>
@@ -1106,7 +1222,7 @@ function DocumentsWorkspace({
         </form>
       </section>
 
-      <section className="request-form-panel">
+      <section className="request-form-panel" id="upload-document-form">
         <div className="panel-toolbar">
           <div>
             <h2>Ajouter une pièce à un dossier</h2>
@@ -1136,7 +1252,7 @@ function DocumentsWorkspace({
         </form>
       </section>
 
-      <section className="document-panel">
+      <section className="document-panel" id="cases-list-panel">
         <div className="panel-toolbar">
           <div>
             <h2>Dossiers et documents</h2>
