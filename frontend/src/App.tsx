@@ -1,20 +1,27 @@
 import {
+  Activity,
   AlertTriangle,
   Archive,
   ArrowUpRight,
+  BarChart3,
   Bell,
   Building2,
   CheckCircle2,
   ChevronDown,
+  ClipboardCheck,
   Clock3,
+  Database,
   Download,
   Eye,
   EyeOff,
   FileCheck2,
+  FileSearch,
   FileText,
   FilePlus2,
   Fingerprint,
+  History,
   Inbox,
+  KeyRound,
   LayoutDashboard,
   LockKeyhole,
   LogIn,
@@ -23,11 +30,16 @@ import {
   MessageSquareText,
   MoreHorizontal,
   Search,
+  Send,
+  ServerCog,
   Settings,
   ShieldCheck,
   SlidersHorizontal,
   UploadCloud,
+  UserCheck,
   Users,
+  Workflow,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
@@ -57,6 +69,30 @@ type CaseItem = {
 
 type AppSection = "overview" | "admin" | "documents";
 type UserRole = "admin" | "user";
+type FeatureKey =
+  | "access"
+  | "new-case"
+  | "cases"
+  | "classification"
+  | "upload-document"
+  | "secure-transmission"
+  | "receive-assign"
+  | "processing"
+  | "validation"
+  | "secure-response"
+  | "lifecycle"
+  | "retention"
+  | "audit"
+  | "backup"
+  | "notifications"
+  | "search"
+  | "dashboard"
+  | "admin-users"
+  | "invite-user"
+  | "admin-institutions"
+  | "create-institution"
+  | "admin-governance"
+  | "integrations";
 
 type AuthUser = {
   id: string;
@@ -123,6 +159,22 @@ type WorkflowDraft =
   | null;
 
 type AdminDraft = "institution" | "user" | null;
+
+type QuickAccessAction = {
+  description: string;
+  feature: FeatureKey;
+  icon: typeof LayoutDashboard;
+  label: string;
+};
+
+type QuickAccessGroup = {
+  actions: QuickAccessAction[];
+  description: string;
+  icon: typeof LayoutDashboard;
+  key: string;
+  title: string;
+  tone: "teal" | "amber" | "blue" | "rose" | "slate";
+};
 
 const cases: CaseItem[] = [
   {
@@ -205,6 +257,7 @@ export function App() {
   const [attachmentsByCase, setAttachmentsByCase] = useState<Record<string, Attachment[]>>({});
   const [workflowDraft, setWorkflowDraft] = useState<WorkflowDraft>(null);
   const [adminDraft, setAdminDraft] = useState<AdminDraft>(null);
+  const [activeFeature, setActiveFeature] = useState<FeatureKey | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard>({
     institutions: 0,
     users: 0,
@@ -378,6 +431,7 @@ export function App() {
       }
 
       event.currentTarget.reset();
+      setActiveFeature("cases");
       setAppMessage(`Demande ${createdCase.reference} créée avec succès.`);
       await loadWorkspaceData();
     } catch (error) {
@@ -405,6 +459,7 @@ export function App() {
         method: "POST",
       });
       event.currentTarget.reset();
+      setActiveFeature("cases");
       setAppMessage("Pièce jointe chiffrée téléversée.");
       await loadWorkspaceData();
     } catch (error) {
@@ -428,6 +483,7 @@ export function App() {
       });
       event.currentTarget.reset();
       setAdminDraft(null);
+      setActiveFeature("admin-institutions");
       setAppMessage(`Institution ${institution.name} créée.`);
       await loadWorkspaceData();
     } catch (error) {
@@ -453,6 +509,7 @@ export function App() {
       });
       event.currentTarget.reset();
       setAdminDraft(null);
+      setActiveFeature("admin-users");
       setAppMessage(`Utilisateur ${user.full_name} créé.`);
       await loadWorkspaceData();
     } catch (error) {
@@ -545,15 +602,23 @@ export function App() {
     }
   }
 
-  function scrollToPanel(panelId: string) {
-    window.requestAnimationFrame(() => {
-      document.getElementById(panelId)?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  }
-
-  function goToPanel(section: AppSection, panelId: string) {
+  function openFeature(feature: FeatureKey) {
+    const section = getFeatureSection(feature, userRole === "admin");
     setActiveSection(section);
-    window.setTimeout(() => scrollToPanel(panelId), 0);
+    setActiveFeature(feature);
+    setWorkflowDraft(null);
+
+    if (feature === "invite-user") {
+      setAdminDraft("user");
+      return;
+    }
+
+    if (feature === "create-institution") {
+      setAdminDraft("institution");
+      return;
+    }
+
+    setAdminDraft(null);
   }
 
   function handleLogout() {
@@ -682,7 +747,11 @@ export function App() {
               <button
                 className={activeSection === item.id ? "active" : undefined}
                 key={item.label}
-                onClick={() => setActiveSection(item.id)}
+                onClick={() => {
+                  setActiveSection(item.id);
+                  setActiveFeature(null);
+                  setAdminDraft(null);
+                }}
                 type="button"
               >
                 <Icon size={18} />
@@ -721,10 +790,11 @@ export function App() {
               className="primary-button"
               onClick={() => {
                 if (activeSection === "admin") {
+                  setActiveFeature("invite-user");
                   setAdminDraft("user");
                   return;
                 }
-                goToPanel("documents", activeSection === "documents" ? "upload-document-form" : "new-request-form");
+                openFeature(activeSection === "documents" ? "upload-document" : "new-case");
               }}
               type="button"
             >
@@ -738,14 +808,7 @@ export function App() {
           </div>
         </header>
 
-        {activeSection !== "admin" ? (
-          <QuickAccessPanel
-            activeSection={activeSection}
-            isAdmin={userRole === "admin"}
-            onGoToPanel={goToPanel}
-            onSetSection={setActiveSection}
-          />
-        ) : null}
+        <QuickAccessPanel activeFeature={activeFeature} isAdmin={userRole === "admin"} onOpenFeature={openFeature} />
 
         {activeSection === "overview" ? <Overview metrics={metrics} /> : null}
         {appMessage ? <p className="app-message">{appMessage}</p> : null}
@@ -757,6 +820,7 @@ export function App() {
             onCancelAdminDraft={() => setAdminDraft(null)}
             onCreateInstitution={handleCreateInstitution}
             onCreateUser={handleCreateUser}
+            activeFeature={activeFeature}
             onOpenAdminDraft={setAdminDraft}
             users={users}
           />
@@ -764,6 +828,7 @@ export function App() {
         {activeSection === "documents" ? (
           <DocumentsWorkspace
             attachmentsByCase={attachmentsByCase}
+            activeFeature={activeFeature}
             currentUser={currentUser}
             exchangeCases={exchangeCases}
             institutions={institutions}
@@ -785,92 +850,295 @@ export function App() {
 }
 
 function QuickAccessPanel({
-  activeSection,
+  activeFeature,
   isAdmin,
-  onGoToPanel,
-  onSetSection,
+  onOpenFeature,
 }: {
-  activeSection: AppSection;
+  activeFeature: FeatureKey | null;
   isAdmin: boolean;
-  onGoToPanel: (section: AppSection, panelId: string) => void;
-  onSetSection: (section: AppSection) => void;
+  onOpenFeature: (feature: FeatureKey) => void;
 }) {
-  const actions =
-    activeSection === "documents"
-      ? [
-          {
-            description: "Créer un dossier",
-            icon: FilePlus2,
-            label: "Nouvelle demande",
-            onClick: () => onGoToPanel("documents", "new-request-form"),
-          },
-          {
-            description: "Joindre un fichier",
-            icon: UploadCloud,
-            label: "Téléversement",
-            onClick: () => onGoToPanel("documents", "upload-document-form"),
-          },
-          {
-            description: "Suivre le traitement",
-            icon: Inbox,
-            label: "Dossiers",
-            onClick: () => onGoToPanel("documents", "cases-list-panel"),
-          },
-          {
-            description: "Voir les indicateurs",
-            icon: LayoutDashboard,
-            label: "Tableau de bord",
-            onClick: () => onSetSection("overview"),
-          },
-        ]
-      : [
-          {
-            description: "Saisir une demande",
-            icon: FilePlus2,
-            label: "Nouveau dossier",
-            onClick: () => onGoToPanel("documents", "new-request-form"),
-          },
-          {
-            description: "Ajouter une pièce",
-            icon: UploadCloud,
-            label: "Déposer document",
-            onClick: () => onGoToPanel("documents", "upload-document-form"),
-          },
-          {
-            description: "Consulter les flux",
-            icon: Inbox,
-            label: "Dossiers",
-            onClick: () => onGoToPanel("documents", "cases-list-panel"),
-          },
-          {
-            description: isAdmin ? "Comptes et institutions" : "Mon espace",
-            icon: isAdmin ? Settings : FileText,
-            label: isAdmin ? "Administration" : "Documents",
-            onClick: () => onSetSection(isAdmin ? "admin" : "documents"),
-          },
-        ];
+  const groups = useMemo(() => getQuickAccessGroups(isAdmin), [isAdmin]);
+  const [activeGroupKey, setActiveGroupKey] = useState<string | null>(null);
+  const activeGroup = groups.find((group) => group.key === activeGroupKey) ?? null;
 
   return (
     <section className="quick-access-panel" aria-label="Accès rapides">
       <div className="quick-access-heading">
         <span className="section-label">Accès rapides</span>
-        <h2>Fonctions principales</h2>
+        <h2>{activeFeature ? getFeatureTitle(activeFeature) : "Fonctions principales"}</h2>
       </div>
       <div className="quick-access-grid">
-        {actions.map((action) => {
-          const Icon = action.icon;
+        {groups.map((group) => {
+          const Icon = group.icon;
           return (
-            <button className="quick-access-card" key={action.label} onClick={action.onClick} type="button">
+            <button
+              className={`quick-access-card ${group.tone}`}
+              key={group.key}
+              onClick={() => setActiveGroupKey(group.key)}
+              type="button"
+            >
               <span className="quick-access-icon">
                 <Icon size={20} />
               </span>
               <span>
-                <strong>{action.label}</strong>
-                <small>{action.description}</small>
+                <strong>{group.title}</strong>
+                <small>{group.description}</small>
+                <em>{group.actions.length} accès</em>
               </span>
             </button>
           );
         })}
+      </div>
+
+      {activeGroup ? (
+        <div className="quick-action-overlay" onClick={() => setActiveGroupKey(null)}>
+          <div className="quick-action-drawer" onClick={(event) => event.stopPropagation()}>
+            <div className="quick-action-drawer-header">
+              <div>
+                <span className="section-label">Groupe</span>
+                <h2>{activeGroup.title}</h2>
+                <p>{activeGroup.description}</p>
+              </div>
+              <button aria-label="Fermer" className="icon-button" onClick={() => setActiveGroupKey(null)} type="button">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="quick-action-list">
+              {activeGroup.actions.map((action) => {
+                const Icon = action.icon;
+                return (
+                  <button
+                    className="quick-action-item"
+                    key={action.feature}
+                    onClick={() => {
+                      onOpenFeature(action.feature);
+                      setActiveGroupKey(null);
+                    }}
+                    type="button"
+                  >
+                    <span className="quick-access-icon">
+                      <Icon size={19} />
+                    </span>
+                    <span>
+                      <strong>{action.label}</strong>
+                      <small>{action.description}</small>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function getQuickAccessGroups(isAdmin: boolean): QuickAccessGroup[] {
+  const adminActions: QuickAccessAction[] = isAdmin
+    ? [
+        {
+          description: "Créer un compte et attribuer un rôle",
+          feature: "invite-user",
+          icon: UserCheck,
+          label: "Inviter utilisateur",
+        },
+        {
+          description: "Liste des comptes et profils d'accès",
+          feature: "admin-users",
+          icon: Users,
+          label: "Utilisateurs",
+        },
+        {
+          description: "Créer une institution participante",
+          feature: "create-institution",
+          icon: Building2,
+          label: "Nouvelle institution",
+        },
+        {
+          description: "Organismes autorisés sur la plateforme",
+          feature: "admin-institutions",
+          icon: Building2,
+          label: "Institutions",
+        },
+        {
+          description: "Règles de gouvernance et politiques",
+          feature: "admin-governance",
+          icon: Settings,
+          label: "Gouvernance",
+        },
+      ]
+    : [];
+
+  return [
+    {
+      actions: [
+        { description: "Connexion, rôles et droits d'accès", feature: "access", icon: KeyRound, label: "Accès" },
+        { description: "Créer une demande d'information", feature: "new-case", icon: FilePlus2, label: "Nouvelle demande" },
+        { description: "Consulter et suivre les dossiers", feature: "cases", icon: Inbox, label: "Dossiers" },
+        { description: "Catégoriser la sensibilité des informations", feature: "classification", icon: ShieldCheck, label: "Classification" },
+      ],
+      description: "Authentification, dossiers et classement de l'information.",
+      icon: LayoutDashboard,
+      key: "core",
+      title: "Coeur métier",
+      tone: "teal",
+    },
+    {
+      actions: [
+        { description: "Téléverser des pièces chiffrées", feature: "upload-document", icon: UploadCloud, label: "Documents sécurisés" },
+        { description: "Transmission protégée entre institutions", feature: "secure-transmission", icon: Send, label: "Transmission" },
+        { description: "Réception et affectation aux agents", feature: "receive-assign", icon: UserCheck, label: "Réception" },
+        { description: "Réponse sécurisée après validation", feature: "secure-response", icon: Mail, label: "Réponse sécurisée" },
+      ],
+      description: "Échanges, chiffrement, envoi et réception des dossiers.",
+      icon: LockKeyhole,
+      key: "secure-exchange",
+      title: "Échanges sécurisés",
+      tone: "blue",
+    },
+    {
+      actions: [
+        { description: "Traitement opérationnel des demandes", feature: "processing", icon: Workflow, label: "Traitement" },
+        { description: "Validation hiérarchique avant envoi", feature: "validation", icon: ClipboardCheck, label: "Validation" },
+        { description: "Suivi de la création à la clôture", feature: "lifecycle", icon: History, label: "Cycle de vie" },
+        { description: "Conservation et archivage des dossiers", feature: "retention", icon: Archive, label: "Conservation" },
+      ],
+      description: "Affectation, traitement, validation et clôture.",
+      icon: Workflow,
+      key: "workflow",
+      title: "Workflow",
+      tone: "amber",
+    },
+    {
+      actions: [
+        { description: "Actions et événements de plateforme", feature: "audit", icon: FileSearch, label: "Journalisation" },
+        { description: "Sauvegarde et reprise après incident", feature: "backup", icon: Database, label: "Sauvegarde" },
+        { description: "Notifications et alertes utilisateurs", feature: "notifications", icon: Bell, label: "Alertes" },
+        { description: "Recherche transverse des dossiers", feature: "search", icon: Search, label: "Recherche" },
+        { description: "Statistiques et taux de réponse", feature: "dashboard", icon: BarChart3, label: "Statistiques" },
+      ],
+      description: "Audit, supervision, recherche et indicateurs.",
+      icon: Activity,
+      key: "supervision",
+      title: "Pilotage",
+      tone: "rose",
+    },
+    {
+      actions: [
+        ...adminActions,
+        { description: "Échanges avec d'autres systèmes", feature: "integrations", icon: ServerCog, label: "Interopérabilité" },
+      ],
+      description: "Administration plateforme et intégrations.",
+      icon: ServerCog,
+      key: "platform",
+      title: "Plateforme",
+      tone: "slate",
+    },
+  ];
+}
+
+function getFeatureSection(feature: FeatureKey, isAdmin: boolean): AppSection {
+  if (feature === "dashboard") {
+    return "overview";
+  }
+
+  if (
+    [
+      "access",
+      "admin-users",
+      "invite-user",
+      "admin-institutions",
+      "create-institution",
+      "admin-governance",
+      "integrations",
+      "backup",
+      "audit",
+    ].includes(feature) &&
+    isAdmin
+  ) {
+    return "admin";
+  }
+
+  return "documents";
+}
+
+function getFeatureTitle(feature: FeatureKey) {
+  const titles: Record<FeatureKey, string> = {
+    access: "Authentification et accès",
+    "new-case": "Création de demande",
+    cases: "Gestion des demandes",
+    classification: "Classification de l'information",
+    "upload-document": "Gestion sécurisée des documents",
+    "secure-transmission": "Transmission sécurisée",
+    "receive-assign": "Réception et affectation",
+    processing: "Traitement des demandes",
+    validation: "Validation hiérarchique",
+    "secure-response": "Envoi sécurisé des réponses",
+    lifecycle: "Cycle de vie des dossiers",
+    retention: "Conservation",
+    audit: "Journalisation",
+    backup: "Sauvegarde et reprise",
+    notifications: "Notifications et alertes",
+    search: "Recherche",
+    dashboard: "Tableau de bord et statistiques",
+    "admin-users": "Administration des utilisateurs",
+    "invite-user": "Inviter un utilisateur",
+    "admin-institutions": "Administration des institutions",
+    "create-institution": "Créer une institution",
+    "admin-governance": "Administration de la plateforme",
+    integrations: "Interopérabilité",
+  };
+
+  return titles[feature];
+}
+
+function getFeatureDescription(feature: FeatureKey | null) {
+  if (!feature) {
+    return "Accès contrôlé aux demandes et pièces téléversées";
+  }
+
+  const descriptions: Partial<Record<FeatureKey, string>> = {
+    classification: "Filtrez et vérifiez les niveaux de sensibilité des demandes.",
+    "receive-assign": "Réceptionnez les demandes entrantes puis affectez-les aux agents.",
+    processing: "Suivez les dossiers à traiter et rédigez les réponses.",
+    "secure-response": "Envoyez les réponses validées par le circuit hiérarchique.",
+    "secure-transmission": "Transmettez les demandes en conservant la traçabilité.",
+    validation: "Validez ou rejetez les réponses avant leur transmission.",
+    lifecycle: "Pilotez chaque dossier jusqu'à clôture.",
+  };
+
+  return descriptions[feature] ?? "Accès contrôlé aux demandes et pièces téléversées";
+}
+
+function FeatureIntro({ description, icon, title }: { description: string; icon: ReactNode; title: string }) {
+  return (
+    <section className="feature-intro-panel">
+      <span className="feature-intro-icon">{icon}</span>
+      <div>
+        <h2>{title}</h2>
+        <p>{description}</p>
+      </div>
+    </section>
+  );
+}
+
+function CapabilityPanel({ feature }: { feature: FeatureKey }) {
+  return (
+    <section className="capability-panel">
+      <div className="panel-toolbar">
+        <div>
+          <h2>{getFeatureTitle(feature)}</h2>
+          <p>Module prévu dans la trajectoire fonctionnelle InfoBridge.</p>
+        </div>
+      </div>
+      <div className="capability-body">
+        <StatusPill label="À brancher" />
+        <p>
+          L'accès rapide est déjà présent pour structurer l'interface. La prochaine étape consiste à relier ce module à
+          ses écrans et endpoints dédiés.
+        </p>
       </div>
     </section>
   );
@@ -900,6 +1168,7 @@ function Overview({ metrics }: { metrics: Array<{ icon: typeof Building2; label:
 }
 
 function AdminWorkspace({
+  activeFeature,
   adminDraft,
   dashboard,
   institutions,
@@ -909,6 +1178,7 @@ function AdminWorkspace({
   onOpenAdminDraft,
   users,
 }: {
+  activeFeature: FeatureKey | null;
   adminDraft: AdminDraft;
   dashboard: Dashboard;
   institutions: Institution[];
@@ -918,38 +1188,8 @@ function AdminWorkspace({
   onOpenAdminDraft: (draft: AdminDraft) => void;
   users: PlatformUser[];
 }) {
-  function scrollToAdminPanel(panelId: string) {
-    document.getElementById(panelId)?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
   return (
     <section className="admin-layout">
-      <section className="admin-quick-panel">
-        <div className="quick-summary">
-          <span className="section-label">Administration plateforme</span>
-          <h2>Actions rapides</h2>
-        </div>
-        <div className="quick-actions">
-          <button className="primary-button" onClick={() => onOpenAdminDraft("user")} type="button">
-            <Users size={18} />
-            Nouvel utilisateur
-          </button>
-          <button className="ghost-button" onClick={() => onOpenAdminDraft("institution")} type="button">
-            <Building2 size={18} />
-            Nouvelle institution
-          </button>
-          <button className="ghost-button" onClick={() => scrollToAdminPanel("admin-governance-panel")} type="button">
-            <Settings size={18} />
-            Paramètres
-          </button>
-        </div>
-        <div className="quick-stats" aria-label="Résumé administration">
-          <span>{institutions.length || dashboard.institutions} institutions</span>
-          <span>{users.length || dashboard.users} utilisateurs</span>
-          <span>{dashboard.security_events} alertes</span>
-        </div>
-      </section>
-
       {adminDraft ? (
         <section className="settings-panel">
           <div className="panel-toolbar">
@@ -1037,6 +1277,15 @@ function AdminWorkspace({
         </section>
       ) : null}
 
+      {!activeFeature && !adminDraft ? (
+        <FeatureIntro
+          description="Choisissez une fonctionnalité dans les accès rapides pour administrer les comptes, institutions, accès, intégrations ou paramètres."
+          icon={<ServerCog size={22} />}
+          title="Console prête"
+        />
+      ) : null}
+
+      {activeFeature === "admin-institutions" ? (
       <section className="settings-panel" id="admin-institutions-panel">
         <div className="panel-toolbar">
           <div>
@@ -1069,7 +1318,9 @@ function AdminWorkspace({
           )}
         </div>
       </section>
+      ) : null}
 
+      {activeFeature === "admin-users" ? (
       <section className="settings-panel" id="admin-users-panel">
         <div className="panel-toolbar">
           <div>
@@ -1100,11 +1351,13 @@ function AdminWorkspace({
           )}
         </div>
       </section>
+      ) : null}
 
+      {activeFeature === "admin-governance" || activeFeature === "access" ? (
       <section className="settings-panel" id="admin-governance-panel">
         <div className="panel-toolbar">
           <div>
-            <h2>Paramètres de gouvernance</h2>
+            <h2>{activeFeature === "access" ? "Authentification et accès" : "Paramètres de gouvernance"}</h2>
             <p>Configuration visible par les administrateurs de la plateforme</p>
           </div>
           <button className="ghost-button" type="button">
@@ -1120,11 +1373,17 @@ function AdminWorkspace({
           <SettingRow label="Événements sécurité" value={String(dashboard.security_events)} tone="warning" />
         </div>
       </section>
+      ) : null}
+
+      {activeFeature === "integrations" || activeFeature === "backup" || activeFeature === "audit" || activeFeature === "notifications" ? (
+        <CapabilityPanel feature={activeFeature} />
+      ) : null}
     </section>
   );
 }
 
 function DocumentsWorkspace({
+  activeFeature,
   attachmentsByCase,
   currentUser,
   exchangeCases,
@@ -1140,6 +1399,7 @@ function DocumentsWorkspace({
   users,
   workflowDraft,
 }: {
+  activeFeature: FeatureKey | null;
   attachmentsByCase: Record<string, Attachment[]>;
   currentUser: AuthUser | null;
   exchangeCases: ExchangeCase[];
@@ -1158,9 +1418,29 @@ function DocumentsWorkspace({
   const currentInstitution = institutions.find((institution) => institution.id === currentUser?.institution_id);
   const receivers = institutions.filter((institution) => institution.id !== currentUser?.institution_id);
   const availableReceivers = receivers.length ? receivers : institutions;
+  const listFeatures: Array<FeatureKey | null> = [
+    "cases",
+    "secure-transmission",
+    "receive-assign",
+    "processing",
+    "validation",
+    "secure-response",
+    "lifecycle",
+    "classification",
+  ];
+  const shouldShowCases = listFeatures.includes(activeFeature);
 
   return (
     <section className="documents-layout">
+      {!activeFeature ? (
+        <FeatureIntro
+          description="Sélectionnez un accès rapide pour créer une demande, téléverser une pièce, traiter un dossier ou consulter le cycle de vie."
+          icon={<Workflow size={22} />}
+          title="Espace documents"
+        />
+      ) : null}
+
+      {activeFeature === "new-case" ? (
       <section className="request-form-panel" id="new-request-form">
         <div className="panel-toolbar">
           <div>
@@ -1221,7 +1501,9 @@ function DocumentsWorkspace({
           </button>
         </form>
       </section>
+      ) : null}
 
+      {activeFeature === "upload-document" ? (
       <section className="request-form-panel" id="upload-document-form">
         <div className="panel-toolbar">
           <div>
@@ -1251,12 +1533,14 @@ function DocumentsWorkspace({
           </button>
         </form>
       </section>
+      ) : null}
 
+      {shouldShowCases ? (
       <section className="document-panel" id="cases-list-panel">
         <div className="panel-toolbar">
           <div>
-            <h2>Dossiers et documents</h2>
-            <p>Accès contrôlé aux demandes et pièces téléversées</p>
+            <h2>{activeFeature ? getFeatureTitle(activeFeature) : "Dossiers et documents"}</h2>
+            <p>{getFeatureDescription(activeFeature)}</p>
           </div>
           <button aria-label="Options documents" className="icon-button" type="button">
             <MoreHorizontal size={18} />
@@ -1375,6 +1659,14 @@ function DocumentsWorkspace({
           )}
         </div>
       </section>
+      ) : null}
+
+      {activeFeature &&
+      !shouldShowCases &&
+      activeFeature !== "new-case" &&
+      activeFeature !== "upload-document" ? (
+        <CapabilityPanel feature={activeFeature} />
+      ) : null}
     </section>
   );
 }
