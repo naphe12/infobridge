@@ -38,3 +38,7 @@ async def store_encrypted_upload(upload: UploadFile, *, case_id: uuid.UUID, purp
         "encrypted": True,
         "encryption_key_ref": "settings.document_encryption_key" if settings.document_encryption_key else "settings.secret_key",
     }
+
+
+def read_encrypted_file(file_path: str) -> bytes:
+    return _fernet().decrypt(Path(file_path).read_bytes())

@@ -606,6 +606,18 @@ h2 {
   width: 42px;
 }
 
+.icon-button:disabled {
+  color: #a8b2bd;
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.icon-button:disabled:hover {
+  border-color: var(--border);
+  box-shadow: none;
+  transform: none;
+}
+
 .quick-access-panel {
   background: #ffffff;
   border: 1px solid var(--border);
@@ -1387,7 +1399,7 @@ h2 {
 }
 
 .request-form.compact-form {
-  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr) minmax(220px, 1fr) auto;
 }
 
 .request-form.admin-form {

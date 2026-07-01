@@ -2,7 +2,7 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -31,7 +31,7 @@ from app.schemas.integration import ApiClientCreate, ApiClientCreated, ApiClient
 from app.schemas.notification import NotificationRead
 from app.schemas.user import BootstrapAdminRequest, LoginRequest, TokenResponse, UserCreate, UserRead
 from app.services.audit import write_audit_log
-from app.services.documents import store_encrypted_upload
+from app.services.documents import read_encrypted_file, store_encrypted_upload
 from app.services.notifications import create_notification
 
 router = APIRouter()
@@ -179,6 +179,24 @@ def list_users(
             .order_by(User.full_name)
         )
     )
+
+
+@router.get("/users/assignees", response_model=list[UserRead])
+def list_assignees(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.SYSTEM_ADMIN, UserRole.INSTITUTION_ADMIN, UserRole.VALIDATOR)),
+) -> list[User]:
+    query = (
+        select(User)
+        .where(
+            User.deleted_at.is_(None),
+            User.role.in_([UserRole.AGENT, UserRole.VALIDATOR, UserRole.INSTITUTION_ADMIN]),
+        )
+        .order_by(User.full_name)
+    )
+    if current_user.role != UserRole.SYSTEM_ADMIN:
+        query = query.where(User.institution_id == current_user.institution_id)
+    return list(db.scalars(query))
 
 
 @router.post("/users", response_model=UserRead, status_code=status.HTTP_201_CREATED)
@@ -489,6 +507,44 @@ def list_attachments(
 ) -> list[Attachment]:
     exchange_case = _get_case(db, case_id)
     return list(db.scalars(select(Attachment).where(Attachment.case_id == exchange_case.id, Attachment.deleted_at.is_(None))))
+
+
+@router.get("/cases/{case_id}/attachments/{attachment_id}/download")
+def download_attachment(
+    case_id: str,
+    attachment_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    exchange_case = _get_case(db, case_id)
+    try:
+        parsed_attachment_id = uuid.UUID(attachment_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found") from exc
+
+    attachment = db.get(Attachment, parsed_attachment_id)
+    if attachment is None or attachment.deleted_at is not None or attachment.case_id != exchange_case.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+
+    content = read_encrypted_file(attachment.file_path)
+    _record_workflow_action(db, exchange_case, current_user, "DOCUMENT_DOWNLOADED", attachment.file_name)
+    write_audit_log(
+        db,
+        action="DOCUMENT_DOWNLOADED",
+        entity_type="attachment",
+        entity_id=attachment.id,
+        user_id=current_user.id,
+        institution_id=current_user.institution_id,
+        ip_address=request.client.host if request.client else None,
+        metadata={"case_id": str(exchange_case.id), "checksum": attachment.checksum},
+    )
+    db.commit()
+    return Response(
+        content=content,
+        media_type=attachment.mime_type,
+        headers={"Content-Disposition": f'attachment; filename="{attachment.file_name}"'},
+    )
 
 
 @router.get("/notifications", response_model=list[NotificationRead])

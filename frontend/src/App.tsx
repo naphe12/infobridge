@@ -253,6 +253,7 @@ export function App() {
   const [appMessage, setAppMessage] = useState("");
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [users, setUsers] = useState<PlatformUser[]>([]);
+  const [assignees, setAssignees] = useState<PlatformUser[]>([]);
   const [exchangeCases, setExchangeCases] = useState<ExchangeCase[]>([]);
   const [attachmentsByCase, setAttachmentsByCase] = useState<Record<string, Attachment[]>>({});
   const [workflowDraft, setWorkflowDraft] = useState<WorkflowDraft>(null);
@@ -302,6 +303,8 @@ export function App() {
       setDashboard(dashboardData);
       setExchangeCases(caseData);
       setInstitutions(institutionData);
+
+      setAssignees(await apiFetch<PlatformUser[]>("/users/assignees").catch(() => []));
 
       if (userRole === "admin") {
         setUsers(await apiFetch<PlatformUser[]>("/users"));
@@ -453,7 +456,7 @@ export function App() {
     try {
       const upload = new FormData();
       upload.append("file", file);
-      upload.append("purpose", "RESPONSE");
+      upload.append("purpose", String(formData.get("purpose") ?? "RESPONSE"));
       await apiFetch<Attachment>(`/cases/${caseId}/attachments`, {
         body: upload,
         method: "POST",
@@ -544,6 +547,31 @@ export function App() {
       await loadWorkspaceData();
     } catch (error) {
       setAppMessage(error instanceof Error ? error.message : "Affectation impossible.");
+    }
+  }
+
+  async function handleDownloadAttachment(caseId: string, attachment: Attachment) {
+    try {
+      const response = await fetch(`${apiUrl}/cases/${caseId}/attachments/${attachment.id}/download`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(payload?.detail ?? `Erreur API ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = attachment.file_name;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setAppMessage(`Téléchargement sécurisé: ${attachment.file_name}`);
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Téléchargement impossible.");
     }
   }
 
@@ -835,12 +863,13 @@ export function App() {
             onAssignCase={handleAssignCase}
             onCreateCase={handleCreateCase}
             onDraftResponse={openDraftResponse}
+            onDownloadAttachment={handleDownloadAttachment}
             onUploadAttachment={handleUploadAttachment}
             onValidateResponse={openValidation}
             onWorkflowAction={handleWorkflowAction}
             onWorkflowDraftCancel={() => setWorkflowDraft(null)}
             onWorkflowDraftSubmit={handleWorkflowDraftSubmit}
-            users={users}
+            users={assignees}
             workflowDraft={workflowDraft}
           />
         ) : null}
@@ -1384,6 +1413,7 @@ function DocumentsWorkspace({
   onAssignCase,
   onCreateCase,
   onDraftResponse,
+  onDownloadAttachment,
   onUploadAttachment,
   onValidateResponse,
   onWorkflowAction,
@@ -1400,6 +1430,7 @@ function DocumentsWorkspace({
   onAssignCase: (caseId: string, assignedTo: string) => void;
   onCreateCase: (event: FormEvent<HTMLFormElement>) => void;
   onDraftResponse: (caseId: string) => void;
+  onDownloadAttachment: (caseId: string, attachment: Attachment) => void;
   onUploadAttachment: (event: FormEvent<HTMLFormElement>) => void;
   onValidateResponse: (caseId: string, approved: boolean) => void;
   onWorkflowAction: (caseId: string, action: "send" | "receive" | "send-response" | "close") => void;
@@ -1561,6 +1592,14 @@ function DocumentsWorkspace({
             </select>
           </label>
           <label>
+            <span>Usage</span>
+            <select name="purpose">
+              <option value="REQUEST">Pièce de demande</option>
+              <option value="RESPONSE">Pièce de réponse</option>
+              <option value="EVIDENCE">Justificatif</option>
+            </select>
+          </label>
+          <label>
             <span>Fichier</span>
             <input name="file" required type="file" />
           </label>
@@ -1639,6 +1678,7 @@ function DocumentsWorkspace({
               const sender = institutions.find((institution) => institution.id === item.sender_institution_id);
               const receiver = institutions.find((institution) => institution.id === item.receiver_institution_id);
               const canAssign = users.length > 0 && ["RECEIVED", "SENT", "IN_REVIEW"].includes(item.status);
+              const primaryAttachment = caseAttachments[0];
 
               return (
                 <article className="document-row" key={item.id}>
@@ -1658,7 +1698,17 @@ function DocumentsWorkspace({
                   <span className="document-date">{formatDate(item.created_at)}</span>
                   <span className="document-size">{caseAttachments.length} pièce(s)</span>
                   <StatusPill label={formatClassification(item.classification)} />
-                  <button className="icon-button" type="button" aria-label={`Consulter ${item.reference}`}>
+                  <button
+                    aria-label={`Télécharger une pièce de ${item.reference}`}
+                    className="icon-button"
+                    disabled={!primaryAttachment}
+                    onClick={() => {
+                      if (primaryAttachment) {
+                        onDownloadAttachment(item.id, primaryAttachment);
+                      }
+                    }}
+                    type="button"
+                  >
                     <Download size={18} />
                   </button>
                   <div className="workflow-actions">
