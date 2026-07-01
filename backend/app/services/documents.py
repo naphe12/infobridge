@@ -22,7 +22,7 @@ async def store_encrypted_upload(upload: UploadFile, *, case_id: uuid.UUID, purp
     content = await upload.read()
     checksum = hashlib.sha256(content).hexdigest()
     stored_file_name = f"{case_id}-{uuid.uuid4()}.bin"
-    storage_dir = Path(settings.document_storage_path)
+    storage_dir = Path(settings.effective_document_storage_path)
     storage_dir.mkdir(parents=True, exist_ok=True)
     file_path = storage_dir / stored_file_name
     file_path.write_bytes(_fernet().encrypt(content))

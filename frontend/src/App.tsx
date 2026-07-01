@@ -566,13 +566,20 @@ export function App() {
       const anchor = document.createElement("a");
       anchor.href = url;
       anchor.download = attachment.file_name;
+      document.body.appendChild(anchor);
       anchor.click();
+      anchor.remove();
       URL.revokeObjectURL(url);
       setAppMessage(`Téléchargement sécurisé: ${attachment.file_name}`);
       await loadWorkspaceData();
     } catch (error) {
       setAppMessage(error instanceof Error ? error.message : "Téléchargement impossible.");
     }
+  }
+
+  function handleMissingAttachment(reference: string) {
+    setActiveFeature("upload-document");
+    setAppMessage(`Aucune pièce jointe pour ${reference}. Ajoutez d'abord un document au dossier.`);
   }
 
   function openDraftResponse(caseId: string) {
@@ -864,6 +871,7 @@ export function App() {
             onCreateCase={handleCreateCase}
             onDraftResponse={openDraftResponse}
             onDownloadAttachment={handleDownloadAttachment}
+            onMissingAttachment={handleMissingAttachment}
             onUploadAttachment={handleUploadAttachment}
             onValidateResponse={openValidation}
             onWorkflowAction={handleWorkflowAction}
@@ -1414,6 +1422,7 @@ function DocumentsWorkspace({
   onCreateCase,
   onDraftResponse,
   onDownloadAttachment,
+  onMissingAttachment,
   onUploadAttachment,
   onValidateResponse,
   onWorkflowAction,
@@ -1431,6 +1440,7 @@ function DocumentsWorkspace({
   onCreateCase: (event: FormEvent<HTMLFormElement>) => void;
   onDraftResponse: (caseId: string) => void;
   onDownloadAttachment: (caseId: string, attachment: Attachment) => void;
+  onMissingAttachment: (reference: string) => void;
   onUploadAttachment: (event: FormEvent<HTMLFormElement>) => void;
   onValidateResponse: (caseId: string, approved: boolean) => void;
   onWorkflowAction: (caseId: string, action: "send" | "receive" | "send-response" | "close") => void;
@@ -1699,17 +1709,23 @@ function DocumentsWorkspace({
                   <span className="document-size">{caseAttachments.length} pièce(s)</span>
                   <StatusPill label={formatClassification(item.classification)} />
                   <button
-                    aria-label={`Télécharger une pièce de ${item.reference}`}
+                    aria-label={
+                      primaryAttachment
+                        ? `Télécharger une pièce de ${item.reference}`
+                        : `Ajouter une pièce à ${item.reference}`
+                    }
                     className="icon-button"
-                    disabled={!primaryAttachment}
                     onClick={() => {
                       if (primaryAttachment) {
                         onDownloadAttachment(item.id, primaryAttachment);
+                        return;
                       }
+                      onMissingAttachment(item.reference);
                     }}
                     type="button"
+                    title={primaryAttachment ? "Télécharger la première pièce" : "Ajouter une pièce au dossier"}
                   >
-                    <Download size={18} />
+                    {primaryAttachment ? <Download size={18} /> : <UploadCloud size={18} />}
                   </button>
                   <div className="workflow-actions">
                     {item.status === "DRAFT" ? (
