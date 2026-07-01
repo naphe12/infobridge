@@ -1040,7 +1040,6 @@ function getFeatureSection(feature: FeatureKey, isAdmin: boolean): AppSection {
 
   if (
     [
-      "access",
       "admin-users",
       "invite-user",
       "admin-institutions",
@@ -1423,6 +1422,16 @@ function DocumentsWorkspace({
     "classification",
   ];
   const shouldShowCases = listFeatures.includes(activeFeature);
+  const filteredCases = getCasesForFeature(exchangeCases, activeFeature, currentUser?.id ?? null);
+  const classificationStats = getClassificationStats(exchangeCases);
+  const accessRows = currentUser
+    ? [
+        { label: "Identité", value: currentUser.full_name },
+        { label: "Adresse institutionnelle", value: currentUser.email },
+        { label: "Rôle", value: formatRole(currentUser.role) },
+        { label: "Institution", value: currentInstitution?.name ?? "Institution non chargée" },
+      ]
+    : [];
 
   return (
     <section className="documents-layout">
@@ -1432,6 +1441,40 @@ function DocumentsWorkspace({
           icon={<Workflow size={22} />}
           title="Espace documents"
         />
+      ) : null}
+
+      {activeFeature === "access" ? (
+      <section className="settings-panel" id="core-access-panel">
+        <div className="panel-toolbar">
+          <div>
+            <h2>Authentification et accès</h2>
+            <p>Profil connecté, périmètre institutionnel et droits applicatifs</p>
+          </div>
+          <StatusPill label={currentUser ? formatRole(currentUser.role) : "Observateur"} />
+        </div>
+        <div className="core-summary-grid">
+          <article>
+            <KeyRound size={20} />
+            <strong>Session active</strong>
+            <span>Jeton API authentifié</span>
+          </article>
+          <article>
+            <Building2 size={20} />
+            <strong>{currentInstitution?.code ?? "Institution"}</strong>
+            <span>{currentInstitution?.name ?? "Périmètre du compte"}</span>
+          </article>
+          <article>
+            <ShieldCheck size={20} />
+            <strong>{currentUser ? formatRole(currentUser.role) : "Profil"}</strong>
+            <span>{isAdminRole(currentUser?.role ?? "OBSERVER") ? "Administration autorisée" : "Accès métier contrôlé"}</span>
+          </article>
+        </div>
+        <div className="settings-list">
+          {accessRows.map((row) => (
+            <SettingRow key={row.label} label={row.label} value={row.value} />
+          ))}
+        </div>
+      </section>
       ) : null}
 
       {activeFeature === "new-case" ? (
@@ -1529,6 +1572,26 @@ function DocumentsWorkspace({
       </section>
       ) : null}
 
+      {activeFeature === "classification" ? (
+      <section className="classification-panel" id="classification-panel">
+        <div className="panel-toolbar">
+          <div>
+            <h2>Classification de l'information</h2>
+            <p>Répartition des demandes par niveau de sensibilité</p>
+          </div>
+        </div>
+        <div className="classification-grid">
+          {classificationStats.map((item) => (
+            <article key={item.level}>
+              <StatusPill label={formatClassification(item.level)} />
+              <strong>{item.count}</strong>
+              <span>{item.description}</span>
+            </article>
+          ))}
+        </div>
+      </section>
+      ) : null}
+
       {shouldShowCases ? (
       <section className="document-panel" id="cases-list-panel">
         <div className="panel-toolbar">
@@ -1570,8 +1633,8 @@ function DocumentsWorkspace({
         ) : null}
 
         <div className="document-list">
-          {exchangeCases.length ? (
-            exchangeCases.map((item) => {
+          {filteredCases.length ? (
+            filteredCases.map((item) => {
               const caseAttachments = attachmentsByCase[item.id] ?? [];
               const sender = institutions.find((institution) => institution.id === item.sender_institution_id);
               const receiver = institutions.find((institution) => institution.id === item.receiver_institution_id);
@@ -1649,7 +1712,7 @@ function DocumentsWorkspace({
               );
             })
           ) : (
-            <p className="empty-state">Aucune demande disponible pour ce profil.</p>
+            <p className="empty-state">Aucune demande ne correspond à cette vue.</p>
           )}
         </div>
       </section>
@@ -1657,6 +1720,7 @@ function DocumentsWorkspace({
 
       {activeFeature &&
       !shouldShowCases &&
+      activeFeature !== "access" &&
       activeFeature !== "new-case" &&
       activeFeature !== "upload-document" ? (
         <CapabilityPanel feature={activeFeature} />
@@ -1913,6 +1977,87 @@ function formatStatus(status: string) {
   };
 
   return labels[status] ?? status;
+}
+
+function getCasesForFeature(items: ExchangeCase[], feature: FeatureKey | null, currentUserId: string | null) {
+  if (feature === "secure-transmission") {
+    return items.filter((item) => ["DRAFT", "SENT"].includes(item.status));
+  }
+
+  if (feature === "receive-assign") {
+    return items.filter((item) => ["SENT", "RECEIVED", "ASSIGNED"].includes(item.status));
+  }
+
+  if (feature === "processing") {
+    return items.filter(
+      (item) =>
+        ["ASSIGNED", "IN_PROGRESS", "RECEIVED", "REJECTED"].includes(item.status) &&
+        (!currentUserId || !item.assigned_to || item.assigned_to === currentUserId),
+    );
+  }
+
+  if (feature === "validation") {
+    return items.filter((item) => item.status === "PENDING_VALIDATION");
+  }
+
+  if (feature === "secure-response") {
+    return items.filter((item) => ["APPROVED", "RESPONSE_SENT"].includes(item.status));
+  }
+
+  if (feature === "lifecycle") {
+    return [...items].sort((first, second) => getLifecycleRank(first.status) - getLifecycleRank(second.status));
+  }
+
+  if (feature === "classification") {
+    return [...items].sort((first, second) => getClassificationRank(second.classification) - getClassificationRank(first.classification));
+  }
+
+  return items;
+}
+
+function getClassificationStats(items: ExchangeCase[]) {
+  const descriptions: Record<string, string> = {
+    CONFIDENTIEL: "Accès restreint",
+    INTERNE: "Usage institutionnel",
+    PUBLIC: "Diffusion ouverte",
+    SECRET: "Traitement renforcé",
+  };
+
+  return ["PUBLIC", "INTERNE", "CONFIDENTIEL", "SECRET"].map((level) => ({
+    count: items.filter((item) => item.classification === level).length,
+    description: descriptions[level],
+    level,
+  }));
+}
+
+function getClassificationRank(classification: string) {
+  const ranks: Record<string, number> = {
+    CONFIDENTIEL: 3,
+    INTERNE: 2,
+    PUBLIC: 1,
+    SECRET: 4,
+  };
+
+  return ranks[classification] ?? 0;
+}
+
+function getLifecycleRank(status: string) {
+  const ranks: Record<string, number> = {
+    APPROVED: 9,
+    ARCHIVED: 12,
+    ASSIGNED: 4,
+    CLOSED: 11,
+    DRAFT: 1,
+    IN_PROGRESS: 6,
+    IN_REVIEW: 5,
+    PENDING_VALIDATION: 7,
+    RECEIVED: 3,
+    REJECTED: 8,
+    RESPONSE_SENT: 10,
+    SENT: 2,
+  };
+
+  return ranks[status] ?? 99;
 }
 
 function formatDate(value: string) {
