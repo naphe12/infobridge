@@ -154,6 +154,9 @@ type Attachment = {
   checksum: string;
   purpose: string;
   encrypted: boolean;
+  logical_document_id: string;
+  version: number;
+  supersedes_id: string | null;
   uploaded_at: string;
 };
 
@@ -2067,7 +2070,7 @@ function DocumentsWorkspace({
                       {item.reference} · {sender?.name ?? "Institution"} vers {receiver?.name ?? "Institution"}
                     </p>
                     {caseAttachments.length ? (
-                      <small>{caseAttachments.map((attachment) => attachment.file_name).join(", ")}</small>
+                      <small>{caseAttachments.map((attachment) => `${attachment.file_name} (v${attachment.version})`).join(", ")}</small>
                     ) : null}
                   </div>
                   <span className="document-type">{formatStatus(item.status)}</span>

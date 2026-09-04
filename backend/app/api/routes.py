@@ -12,7 +12,7 @@ from app.core.security import create_access_token, create_refresh_token, decode_
 from app.db.session import get_db
 from app.models.audit import AuditLog
 from app.models.common import CasePriority, CaseStatus, Classification, SecuritySeverity, UserRole, UserStatus, WorkflowStatus
-from app.models.exchange import Attachment, ExchangeCase
+from app.models.exchange import Attachment, ExchangeCase, Receipt
 from app.models.institution import Institution
 from app.models.integration import ApiClient
 from app.models.governance import AccessRule
@@ -28,6 +28,7 @@ from app.schemas.exchange import (
     CaseValidation,
     ExchangeCaseCreate,
     ExchangeCaseRead,
+    ReceiptRead,
     WorkflowActionRead,
 )
 from app.schemas.audit import AuditLogRead, SecurityEventRead
@@ -647,6 +648,7 @@ def receive_case(
     enforce_case_permission(db, current_user, exchange_case, "cases.receive")
     transition_case(exchange_case, CaseStatus.RECEIVED)
     exchange_case.received_at = datetime.now(timezone.utc)
+    _upsert_receipt(db, exchange_case, current_user)
     _record_workflow_action(db, exchange_case, current_user, "CASE_RECEIVED", "Demande réceptionnée")
     _audit_case_action(db, request, current_user, exchange_case, "CASE_RECEIVED")
     db.commit()
@@ -857,17 +859,30 @@ async def upload_attachment(
     case_id: str,
     file: UploadFile = File(...),
     purpose: str = Form(default="REQUEST"),
+    replaces_attachment_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(UserRole.SYSTEM_ADMIN, UserRole.INSTITUTION_ADMIN, UserRole.AGENT)),
 ) -> Attachment:
     exchange_case = _get_case(db, case_id)
     _require_case_access(exchange_case, current_user)
     enforce_case_permission(db, current_user, exchange_case, "documents.upload")
+    version_data: dict[str, object] = {}
+    if replaces_attachment_id:
+        try:
+            previous = db.get(Attachment, uuid.UUID(replaces_attachment_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid previous attachment") from exc
+        if previous is None or previous.case_id != exchange_case.id or previous.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Previous attachment not found in this case")
+        latest_version = db.scalar(select(func.max(Attachment.version)).where(
+            Attachment.logical_document_id == previous.logical_document_id)) or previous.version
+        version_data = {"logical_document_id": previous.logical_document_id, "version": latest_version + 1,
+                        "supersedes_id": previous.id}
     try:
         stored = await store_encrypted_upload(file, case_id=exchange_case.id, purpose=purpose)
     except DocumentValidationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-    attachment = Attachment(case_id=exchange_case.id, **stored)
+    attachment = Attachment(case_id=exchange_case.id, **stored, **version_data)
     db.add(attachment)
     db.flush()
     _record_workflow_action(db, exchange_case, current_user, "DOCUMENT_UPLOADED", attachment.file_name)
@@ -878,11 +893,86 @@ async def upload_attachment(
         entity_id=attachment.id,
         user_id=current_user.id,
         institution_id=current_user.institution_id,
-        metadata={"case_id": str(exchange_case.id), "checksum": attachment.checksum},
+        metadata={"case_id": str(exchange_case.id), "checksum": attachment.checksum, "version": attachment.version},
     )
     db.commit()
     db.refresh(attachment)
     return attachment
+
+
+@router.get("/cases/{case_id}/attachments/{attachment_id}/versions", response_model=list[AttachmentRead])
+def attachment_versions(case_id: str, attachment_id: str, db: Session = Depends(get_db),
+                        current_user: User = Depends(get_current_user)) -> list[Attachment]:
+    exchange_case = _get_case(db, case_id)
+    _require_case_access(exchange_case, current_user)
+    enforce_case_permission(db, current_user, exchange_case, "documents.read")
+    try:
+        attachment = db.get(Attachment, uuid.UUID(attachment_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found") from exc
+    if attachment is None or attachment.case_id != exchange_case.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+    return list(db.scalars(select(Attachment).where(Attachment.logical_document_id == attachment.logical_document_id)
+                           .order_by(Attachment.version.desc())))
+
+
+@router.post("/cases/{case_id}/attachments/{attachment_id}/archive", response_model=AttachmentRead)
+def archive_attachment(case_id: str, attachment_id: str, request: Request, db: Session = Depends(get_db),
+                       current_user: User = Depends(require_roles(UserRole.SYSTEM_ADMIN, UserRole.INSTITUTION_ADMIN, UserRole.AGENT))) -> Attachment:
+    exchange_case = _get_case(db, case_id)
+    _require_case_access(exchange_case, current_user)
+    enforce_case_permission(db, current_user, exchange_case, "documents.archive")
+    try:
+        attachment = db.get(Attachment, uuid.UUID(attachment_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found") from exc
+    if attachment is None or attachment.case_id != exchange_case.id or attachment.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+    attachment.deleted_at = datetime.now(timezone.utc)
+    attachment.deleted_by = current_user.id
+    write_audit_log(db, action="DOCUMENT_ARCHIVED", entity_type="attachment", entity_id=attachment.id,
+                    user_id=current_user.id, institution_id=current_user.institution_id,
+                    ip_address=request.client.host if request.client else None,
+                    metadata={"case_id": str(exchange_case.id), "version": attachment.version})
+    db.commit()
+    db.refresh(attachment)
+    return attachment
+
+
+@router.get("/cases/{case_id}/receipts", response_model=list[ReceiptRead])
+def list_receipts(case_id: str, db: Session = Depends(get_db),
+                  current_user: User = Depends(get_current_user)) -> list[Receipt]:
+    exchange_case = _get_case(db, case_id)
+    _require_case_access(exchange_case, current_user)
+    enforce_case_permission(db, current_user, exchange_case, "cases.read")
+    return list(db.scalars(select(Receipt).where(Receipt.case_id == exchange_case.id).order_by(Receipt.received_at)))
+
+
+@router.post("/cases/{case_id}/receipts", response_model=ReceiptRead)
+def acknowledge_case(case_id: str, request: Request, db: Session = Depends(get_db),
+                     current_user: User = Depends(get_current_user)) -> Receipt:
+    exchange_case = _get_case(db, case_id)
+    _require_receiver_access(exchange_case, current_user)
+    receipt = _upsert_receipt(db, exchange_case, current_user)
+    write_audit_log(db, action="CASE_ACKNOWLEDGED", entity_type="receipt", entity_id=receipt.id,
+                    user_id=current_user.id, institution_id=current_user.institution_id,
+                    ip_address=request.client.host if request.client else None,
+                    metadata={"case_id": str(exchange_case.id)})
+    db.commit()
+    db.refresh(receipt)
+    return receipt
+
+
+@router.patch("/cases/{case_id}/receipts/read", response_model=ReceiptRead)
+def mark_case_read(case_id: str, db: Session = Depends(get_db),
+                   current_user: User = Depends(get_current_user)) -> Receipt:
+    exchange_case = _get_case(db, case_id)
+    _require_receiver_access(exchange_case, current_user)
+    receipt = _upsert_receipt(db, exchange_case, current_user)
+    receipt.read_at = receipt.read_at or datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(receipt)
+    return receipt
 
 
 @router.get("/cases/{case_id}/attachments", response_model=list[AttachmentRead])
@@ -1142,6 +1232,15 @@ def _refresh_session_id(refresh_token: str) -> uuid.UUID:
         return uuid.UUID(session_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token") from exc
+
+
+def _upsert_receipt(db: Session, exchange_case: ExchangeCase, user: User) -> Receipt:
+    receipt = db.scalar(select(Receipt).where(Receipt.case_id == exchange_case.id, Receipt.receiver_user_id == user.id))
+    if receipt is None:
+        receipt = Receipt(case_id=exchange_case.id, receiver_user_id=user.id)
+        db.add(receipt)
+        db.flush()
+    return receipt
 
 
 def _require_case_access(exchange_case: ExchangeCase, current_user: User) -> None:

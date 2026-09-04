@@ -85,6 +85,9 @@ class AttachmentRead(BaseModel):
     id: uuid.UUID
     case_id: uuid.UUID | None = None
     message_id: uuid.UUID | None = None
+    logical_document_id: uuid.UUID
+    version: int
+    supersedes_id: uuid.UUID | None = None
     file_name: str
     mime_type: str
     size_bytes: int
@@ -92,5 +95,15 @@ class AttachmentRead(BaseModel):
     purpose: str
     encrypted: bool
     uploaded_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReceiptRead(BaseModel):
+    id: uuid.UUID
+    case_id: uuid.UUID
+    receiver_user_id: uuid.UUID
+    received_at: datetime
+    read_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)

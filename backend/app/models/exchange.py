@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -49,9 +49,13 @@ class Message(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
 
 class Attachment(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     __tablename__ = "attachments"
+    __table_args__ = (UniqueConstraint("logical_document_id", "version", name="uq_attachment_document_version"),)
 
     case_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("exchange_cases.id"), index=True, nullable=True)
     message_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id"), index=True, nullable=True)
+    logical_document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, default=uuid.uuid4)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("attachments.id"), nullable=True)
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     stored_file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
@@ -68,6 +72,7 @@ class Attachment(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
 
 class Receipt(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "receipts"
+    __table_args__ = (UniqueConstraint("case_id", "receiver_user_id", name="uq_receipt_case_user"),)
 
     case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("exchange_cases.id"), index=True)
     receiver_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
