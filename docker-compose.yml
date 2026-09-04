@@ -35,12 +35,27 @@ services:
       API_CORS_ORIGINS: http://localhost:5173
       SECRET_KEY: local-dev-secret-change-me
       ACCESS_TOKEN_EXPIRE_MINUTES: 15
+      LIFECYCLE_WORKER_ENABLED: "true"
+      LIFECYCLE_SCAN_INTERVAL_SECONDS: 3600
+      DUE_ALERTS_ENABLED: "true"
+      DUE_SOON_HOURS: 24
+      DOCUMENT_PURGE_ENABLED: "false"
+      DOCUMENT_STORAGE_BACKEND: s3
+      DOCUMENT_ENCRYPTION_KEYS: '{"local-v1":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
+      DOCUMENT_ACTIVE_ENCRYPTION_KEY_ID: local-v1
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_BUCKET: infobridge-documents
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-infobridge}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-infobridge_minio_password}
+      S3_AUTO_CREATE_BUCKET: "true"
       PORT: 8000
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      minio:
+        condition: service_started
 
   frontend:
     build:

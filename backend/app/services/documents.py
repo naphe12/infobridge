@@ -1,15 +1,20 @@
-import base64
 import hashlib
 import io
 import json
 import uuid
 import zipfile
-from pathlib import Path
+from datetime import datetime, timezone
 
-from cryptography.fernet import Fernet
 from fastapi import UploadFile
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models.common import CaseStatus
+from app.models.exchange import Attachment, ExchangeCase, Message
+from app.services.audit import write_audit_log
+from app.services.encryption import decrypt_document, encrypt_document
+from app.services.storage import delete_bytes, read_bytes, store_bytes
 
 
 class DocumentValidationError(ValueError):
@@ -18,15 +23,6 @@ class DocumentValidationError(ValueError):
     def __init__(self, message: str, *, status_code: int) -> None:
         super().__init__(message)
         self.status_code = status_code
-
-
-def _fernet() -> Fernet:
-    if settings.document_encryption_key:
-        key = settings.document_encryption_key.encode()
-    else:
-        digest = hashlib.sha256(settings.secret_key.encode()).digest()
-        key = base64.urlsafe_b64encode(digest)
-    return Fernet(key)
 
 
 async def store_encrypted_upload(upload: UploadFile, *, case_id: uuid.UUID, purpose: str) -> dict[str, object]:
@@ -45,28 +41,127 @@ async def store_encrypted_upload(upload: UploadFile, *, case_id: uuid.UUID, purp
     if mime_type not in detected_types:
         raise DocumentValidationError("File content does not match its declared type", status_code=415)
 
+    return store_encrypted_content(
+        content,
+        file_name=upload.filename,
+        case_id=case_id,
+        purpose=purpose,
+        mime_type=mime_type,
+    )
+
+
+def store_encrypted_content(
+    content: bytes,
+    *,
+    file_name: str | None,
+    case_id: uuid.UUID,
+    purpose: str,
+    mime_type: str,
+) -> dict[str, object]:
     checksum = hashlib.sha256(content).hexdigest()
     stored_file_name = f"{case_id}-{uuid.uuid4()}.bin"
-    storage_dir = Path(settings.effective_document_storage_path)
-    storage_dir.mkdir(parents=True, exist_ok=True)
-    file_path = storage_dir / stored_file_name
-    file_path.write_bytes(_fernet().encrypt(content))
+    encrypted = encrypt_document(content)
+    file_path, storage_backend = store_bytes(stored_file_name, encrypted.content)
 
     return {
-        "file_name": upload.filename or stored_file_name,
+        "file_name": file_name or stored_file_name,
         "stored_file_name": stored_file_name,
-        "file_path": str(file_path),
+        "file_path": file_path,
+        "storage_backend": storage_backend,
         "mime_type": mime_type,
         "size_bytes": len(content),
         "checksum": checksum,
         "purpose": purpose,
         "encrypted": True,
-        "encryption_key_ref": "settings.document_encryption_key" if settings.document_encryption_key else "settings.secret_key",
+        "encryption_key_ref": encrypted.key_ref,
+        "encryption_algorithm": encrypted.algorithm,
+        "encrypted_data_key": encrypted.encrypted_data_key,
+        "encryption_nonce": encrypted.nonce,
     }
 
 
-def read_encrypted_file(file_path: str) -> bytes:
-    return _fernet().decrypt(Path(file_path).read_bytes())
+def read_encrypted_file(
+    file_path: str,
+    *,
+    storage_backend: str,
+    encryption_key_ref: str | None,
+    encryption_algorithm: str | None = None,
+    encrypted_data_key: str | None = None,
+    encryption_nonce: str | None = None,
+) -> bytes:
+    return decrypt_document(
+        read_bytes(file_path, storage_backend),
+        algorithm=encryption_algorithm,
+        key_ref=encryption_key_ref,
+        encrypted_data_key=encrypted_data_key,
+        nonce=encryption_nonce,
+    )
+
+
+def count_purge_eligible_documents(db: Session, *, now: datetime | None = None) -> int:
+    current_time = now or datetime.now(timezone.utc)
+    return db.scalar(
+        select(func.count())
+        .select_from(Attachment)
+        .outerjoin(Message, Message.id == Attachment.message_id)
+        .join(ExchangeCase, ExchangeCase.id == func.coalesce(Attachment.case_id, Message.case_id))
+        .where(
+            Attachment.purged_at.is_(None),
+            ExchangeCase.status == CaseStatus.ARCHIVED,
+            ExchangeCase.retention_until.is_not(None),
+            ExchangeCase.retention_until <= current_time,
+        )
+    ) or 0
+
+
+def purge_expired_documents(db: Session, *, now: datetime | None = None) -> dict[str, int]:
+    current_time = now or datetime.now(timezone.utc)
+    attachments = db.scalars(
+        select(Attachment)
+        .outerjoin(Message, Message.id == Attachment.message_id)
+        .join(ExchangeCase, ExchangeCase.id == func.coalesce(Attachment.case_id, Message.case_id))
+        .where(
+            Attachment.purged_at.is_(None),
+            ExchangeCase.status == CaseStatus.ARCHIVED,
+            ExchangeCase.retention_until.is_not(None),
+            ExchangeCase.retention_until <= current_time,
+        )
+        .order_by(Attachment.uploaded_at, Attachment.id)
+    )
+    result = {"purged": 0, "failed": 0}
+    for attachment in attachments:
+        case_id = attachment.case_id or (attachment.message.case_id if attachment.message else None)
+        try:
+            delete_bytes(attachment.file_path, attachment.storage_backend)
+        except Exception as exc:
+            attachment.purge_error = str(exc)[:1000]
+            result["failed"] += 1
+            write_audit_log(
+                db,
+                action="DOCUMENT_PURGE_FAILED",
+                entity_type="attachment",
+                entity_id=attachment.id,
+                metadata={"case_id": str(case_id), "error": attachment.purge_error},
+            )
+            continue
+
+        attachment.deleted_at = attachment.deleted_at or current_time
+        attachment.purged_at = current_time
+        attachment.purge_error = None
+        result["purged"] += 1
+        write_audit_log(
+            db,
+            action="DOCUMENT_PURGED",
+            entity_type="attachment",
+            entity_id=attachment.id,
+            metadata={
+                "case_id": str(case_id),
+                "checksum": attachment.checksum,
+                "storage_backend": attachment.storage_backend,
+                "version": attachment.version,
+            },
+        )
+    return result
 
 
 def _detect_mime_types(content: bytes) -> set[str]:

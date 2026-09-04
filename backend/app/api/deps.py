@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import Depends, HTTPException, status
@@ -7,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.core.security import decode_access_token
 from app.db.session import get_db
-from app.models.common import UserRole, UserStatus
+from app.models.common import InstitutionStatus, UserRole, UserStatus
+from app.models.institution import Institution
 from app.models.security import AuthSession
 from app.models.integration import ApiClient
 from app.models.user import User
@@ -39,6 +41,9 @@ def get_current_user(
     user = db.get(User, user_id)
     if user is None or user.status != UserStatus.ACTIVE or user.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive or unknown user")
+    institution = db.get(Institution, user.institution_id)
+    if institution is None or institution.status != InstitutionStatus.ACTIVE or institution.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive institution")
     return user
 
 
@@ -74,11 +79,29 @@ def require_client_scope(required_scope: str):
             payload = decode_access_token(credentials.credentials)
         except JWTError as exc:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid client token") from exc
-        if payload.get("typ") != "api_client" or required_scope not in payload.get("scopes", []):
+        if payload.get("typ") != "api_client":
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid client token")
+        token_scopes = payload.get("scopes", [])
+        if not isinstance(token_scopes, list) or required_scope not in token_scopes:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing API scope")
-        client = db.get(ApiClient, payload.get("sub"))
-        if client is None or not client.active:
+        try:
+            client_id = uuid.UUID(str(payload.get("sub")))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid client token") from exc
+        client = db.get(ApiClient, client_id)
+        if client is None or not client.active or payload.get("ver") != client.token_version:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive API client")
+        current_scopes = set(client.scopes.split())
+        if required_scope not in current_scopes:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="API scope has been revoked")
+        token_institution_id = payload.get("inst")
+        expected_institution_id = str(client.institution_id) if client.institution_id else None
+        if token_institution_id != expected_institution_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid client scope")
+        if client.institution_id is not None:
+            institution = db.get(Institution, client.institution_id)
+            if institution is None or institution.status != InstitutionStatus.ACTIVE or institution.deleted_at is not None:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive client institution")
         return client
 
     return dependency

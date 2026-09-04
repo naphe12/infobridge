@@ -2,13 +2,14 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.models.common import CaseStatus
 from app.models.exchange import ExchangeCase
 from app.models.notification import Notification
 from app.services.audit import write_audit_log
-from app.services.notifications import create_notification
+from app.services.platform_settings import get_platform_setting
 
 OPEN_STATUSES = {
     CaseStatus.DRAFT,
@@ -109,10 +110,8 @@ def create_due_alerts(
 
 
 def apply_retention_policy(db: Session, *, now: datetime | None = None) -> int:
-    from app.core.config import settings
-
     current_time = now or datetime.now(timezone.utc)
-    archive_before = current_time - timedelta(days=settings.auto_archive_after_days)
+    archive_before = current_time - timedelta(days=int(get_platform_setting(db, "auto_archive_days")))
     cases = db.scalars(select(ExchangeCase).where(ExchangeCase.status == CaseStatus.CLOSED,
                                                    ExchangeCase.closed_at <= archive_before,
                                                    ExchangeCase.deleted_at.is_(None)))
@@ -120,7 +119,7 @@ def apply_retention_policy(db: Session, *, now: datetime | None = None) -> int:
     for exchange_case in cases:
         exchange_case.status = CaseStatus.ARCHIVED
         exchange_case.retention_until = exchange_case.retention_until or (
-            current_time + timedelta(days=settings.default_retention_days)
+            current_time + timedelta(days=int(get_platform_setting(db, "default_retention_days")))
         )
         write_audit_log(db, action="CASE_AUTO_ARCHIVED", entity_type="exchange_case",
                         entity_id=exchange_case.id, institution_id=exchange_case.sender_institution_id,
@@ -138,19 +137,23 @@ def _create_case_alert_once_per_day(
     level: str,
     day_start: datetime,
 ) -> bool:
-    existing = db.scalar(
-        select(Notification).where(
-            Notification.case_id == exchange_case.id,
-            Notification.title == title,
-            Notification.created_at >= day_start,
-        )
-    )
-    if existing:
-        return False
-
+    alert_kind = "overdue" if level == "ERROR" else "due-soon"
+    dedupe_key = f"deadline:{exchange_case.id}:{alert_kind}:{day_start.date().isoformat()}"
     if exchange_case.assigned_to:
-        create_notification(db, title=title, body=body, level=level, user_id=exchange_case.assigned_to, case_id=exchange_case.id)
+        recipient = {"user_id": exchange_case.assigned_to, "institution_id": None}
     else:
-        create_notification(db, title=title, body=body, level=level,
-                            institution_id=exchange_case.receiver_institution_id, case_id=exchange_case.id)
-    return True
+        recipient = {"user_id": None, "institution_id": exchange_case.receiver_institution_id}
+    statement = (
+        insert(Notification)
+        .values(
+            **recipient,
+            case_id=exchange_case.id,
+            title=title,
+            body=body,
+            level=level,
+            dedupe_key=dedupe_key,
+        )
+        .on_conflict_do_nothing(index_elements=[Notification.dedupe_key])
+        .returning(Notification.id)
+    )
+    return db.scalar(statement) is not None

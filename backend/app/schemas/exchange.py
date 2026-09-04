@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -89,20 +90,28 @@ class AttachmentRead(BaseModel):
     version: int
     supersedes_id: uuid.UUID | None = None
     file_name: str
+    storage_backend: str
     mime_type: str
     size_bytes: int
     checksum: str
     purpose: str
     encrypted: bool
+    encryption_algorithm: str
     uploaded_at: datetime
+    purged_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class DocumentPurgeRequest(BaseModel):
+    confirmation: Literal["PURGE_EXPIRED_DOCUMENTS"]
 
 
 class ReceiptRead(BaseModel):
     id: uuid.UUID
     case_id: uuid.UUID
     receiver_user_id: uuid.UUID
+    receiver_name: str
     received_at: datetime
     read_at: datetime | None = None
 

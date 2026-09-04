@@ -2,7 +2,7 @@ from app.models.audit import AuditLog
 from app.models.exchange import Attachment, ExchangeCase, Message, Receipt
 from app.models.institution import Institution
 from app.models.integration import ApiClient
-from app.models.governance import AccessRule
+from app.models.governance import AccessRule, PlatformSetting, ReferenceItem
 from app.models.notification import Notification
 from app.models.security import AuthSession, SecurityEvent
 from app.models.user import User
@@ -18,6 +18,8 @@ __all__ = [
     "Institution",
     "Message",
     "Notification",
+    "PlatformSetting",
+    "ReferenceItem",
     "Receipt",
     "SecurityEvent",
     "User",

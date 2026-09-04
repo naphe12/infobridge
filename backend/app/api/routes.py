@@ -1,6 +1,7 @@
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy import func, or_, select
@@ -11,7 +12,7 @@ from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, decode_access_token, hash_password, hash_token, verify_password
 from app.db.session import get_db
 from app.models.audit import AuditLog
-from app.models.common import CasePriority, CaseStatus, Classification, SecuritySeverity, UserRole, UserStatus, WorkflowStatus
+from app.models.common import CasePriority, CaseStatus, Classification, InstitutionStatus, SecuritySeverity, UserRole, UserStatus, WorkflowStatus
 from app.models.exchange import Attachment, ExchangeCase, Receipt
 from app.models.institution import Institution
 from app.models.integration import ApiClient
@@ -26,6 +27,7 @@ from app.schemas.exchange import (
     CaseAssignment,
     CaseResponseDraft,
     CaseValidation,
+    DocumentPurgeRequest,
     ExchangeCaseCreate,
     ExchangeCaseRead,
     ReceiptRead,
@@ -33,16 +35,55 @@ from app.schemas.exchange import (
 )
 from app.schemas.audit import AuditLogRead, SecurityEventRead
 from app.schemas.institution import InstitutionCreate, InstitutionRead, InstitutionUpdate
-from app.schemas.integration import ApiClientCreate, ApiClientCreated, ApiClientLogin, ApiClientRead, ApiClientToken
-from app.schemas.governance import AccessRuleRead, AccessRuleWrite
+from app.schemas.integration import (
+    ApiClientCreate,
+    ApiClientCreated,
+    ApiClientLogin,
+    ApiClientRead,
+    ApiClientSecretRotated,
+    ApiClientToken,
+    ApiClientUpdate,
+    ApiScopeRead,
+)
+from app.schemas.governance import (
+    AccessRuleRead,
+    AccessRuleWrite,
+    PlatformSettingRead,
+    PlatformSettingUpdate,
+    ReferenceItemRead,
+    ReferenceItemUpdate,
+)
 from app.schemas.notification import NotificationRead
 from app.schemas.user import BootstrapAdminRequest, LoginRequest, RefreshTokenRequest, TokenResponse, UserCreate, UserRead, UserUpdate
 from app.services.audit import write_audit_log
+from app.services.audit_export import audit_logs_to_csv, audit_logs_to_pdf
 from app.services.deadlines import count_due_soon_cases, count_overdue_cases, create_due_alerts
-from app.services.documents import DocumentValidationError, read_encrypted_file, store_encrypted_upload
+from app.services.documents import (
+    DocumentValidationError,
+    count_purge_eligible_documents,
+    purge_expired_documents,
+    read_encrypted_file,
+    store_encrypted_upload,
+)
 from app.services.notifications import create_notification, create_notifications_for_roles
 from app.services.workflow import transition_case
 from app.services.permissions import can_access_case, enforce_case_permission
+from app.services.sessions import revoke_sessions_for_users, revoke_user_sessions
+from app.services.lifecycle import lifecycle_status
+from app.services.platform_settings import (
+    SETTING_DEFINITIONS,
+    PlatformSettingValidationError,
+    get_platform_setting,
+    set_platform_setting,
+    setting_view,
+)
+from app.services.reference_data import (
+    ReferenceDataValidationError,
+    ensure_reference_active,
+    list_reference_items,
+    update_reference_item,
+)
+from app.services.m2m import normalize_scopes, scope_views
 
 router = APIRouter()
 
@@ -91,10 +132,12 @@ def dashboard(
 @router.post("/auth/login", response_model=TokenResponse)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
     user = db.scalar(select(User).where(User.email == payload.email.lower(), User.deleted_at.is_(None)))
+    lock_threshold = int(get_platform_setting(db, "login_lock_threshold"))
+    alert_threshold = max(1, lock_threshold - 2)
     if user is None or not verify_password(payload.password, user.password_hash):
         if user is not None:
             user.failed_login_count += 1
-            if user.failed_login_count >= 5:
+            if user.failed_login_count >= lock_threshold:
                 user.status = UserStatus.LOCKED
             write_audit_log(
                 db,
@@ -106,13 +149,13 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
                 ip_address=request.client.host if request.client else None,
                 metadata={"failed_login_count": user.failed_login_count},
             )
-            if user.failed_login_count >= 3:
+            if user.failed_login_count >= alert_threshold:
                 db.add(
                     SecurityEvent(
                         user_id=user.id,
                         institution_id=user.institution_id,
                         event_type="FAILED_LOGIN_THRESHOLD",
-                        severity=SecuritySeverity.HIGH if user.failed_login_count >= 5 else SecuritySeverity.MEDIUM,
+                        severity=SecuritySeverity.HIGH if user.failed_login_count >= lock_threshold else SecuritySeverity.MEDIUM,
                         ip_address=request.client.host if request.client else None,
                         user_agent=request.headers.get("user-agent"),
                         details={"failed_login_count": user.failed_login_count},
@@ -123,6 +166,9 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 
     if user.status != UserStatus.ACTIVE:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive or unknown user")
+    institution = db.get(Institution, user.institution_id)
+    if institution is None or institution.status != InstitutionStatus.ACTIVE or institution.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive institution")
 
     user.failed_login_count = 0
     user.last_login_at = datetime.now(timezone.utc)
@@ -132,7 +178,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         id=session_id,
         user_id=user.id,
         refresh_token_hash=refresh_token_hash,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=int(get_platform_setting(db, "refresh_token_days"))),
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
@@ -142,6 +188,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         str(user.id),
         {"role": user.role.value, "institution_id": str(user.institution_id)},
         session_id=session.id,
+        expires_minutes=int(get_platform_setting(db, "access_token_minutes")),
     )
     write_audit_log(
         db,
@@ -175,6 +222,11 @@ def refresh_access_token(payload: RefreshTokenRequest, request: Request, db: Ses
         session.revoked_at = now
         db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive or unknown user")
+    institution = db.get(Institution, user.institution_id)
+    if institution is None or institution.status != InstitutionStatus.ACTIVE or institution.deleted_at is not None:
+        session.revoked_at = now
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive institution")
 
     refresh_token, session.refresh_token_hash = create_refresh_token(session.id)
     session.last_used_at = now
@@ -182,6 +234,7 @@ def refresh_access_token(payload: RefreshTokenRequest, request: Request, db: Ses
         str(user.id),
         {"role": user.role.value, "institution_id": str(user.institution_id)},
         session_id=session.id,
+        expires_minutes=int(get_platform_setting(db, "access_token_minutes")),
     )
     write_audit_log(
         db,
@@ -226,6 +279,7 @@ def bootstrap_admin(payload: BootstrapAdminRequest, request: Request, db: Sessio
     existing_users = db.scalar(select(func.count()).select_from(User)) or 0
     if existing_users:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Bootstrap is only available before users exist")
+    _require_active_reference(db, "institution_type", payload.institution_type.value)
 
     institution = Institution(
         name=payload.institution_name,
@@ -287,6 +341,7 @@ def create_institution(
     exists = db.scalar(select(Institution).where(Institution.code == payload.code.upper()))
     if exists:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Institution code already exists")
+    _require_active_reference(db, "institution_type", payload.type.value)
 
     institution = Institution(name=payload.name, code=payload.code.upper(), type=payload.type)
     db.add(institution)
@@ -334,6 +389,56 @@ def list_audit_logs(
     return list(db.scalars(query.order_by(AuditLog.created_at.desc()).limit(limit)))
 
 
+@router.get("/audit-logs/export")
+def export_audit_logs(
+    export_format: Literal["csv", "pdf"] = Query(alias="format"),
+    action: str | None = Query(default=None, max_length=100),
+    entity_type: str | None = Query(default=None, max_length=100),
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    limit: int = Query(default=5000, ge=1, le=10000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.SYSTEM_ADMIN, UserRole.INSTITUTION_ADMIN, UserRole.AUDITOR)),
+) -> Response:
+    query = select(AuditLog)
+    if current_user.role != UserRole.SYSTEM_ADMIN:
+        query = query.where(AuditLog.institution_id == current_user.institution_id)
+    if action:
+        query = query.where(AuditLog.action == action)
+    if entity_type:
+        query = query.where(AuditLog.entity_type == entity_type)
+    if date_from:
+        query = query.where(AuditLog.created_at >= date_from)
+    if date_to:
+        query = query.where(AuditLog.created_at <= date_to)
+    logs = list(db.scalars(query.order_by(AuditLog.created_at.desc()).limit(limit)))
+
+    content = audit_logs_to_csv(logs) if export_format == "csv" else audit_logs_to_pdf(logs)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    filename = f"infobridge-audit-{timestamp}.{export_format}"
+    write_audit_log(
+        db,
+        action="AUDIT_EXPORTED",
+        entity_type="audit_log",
+        user_id=current_user.id,
+        institution_id=current_user.institution_id,
+        metadata={
+            "format": export_format,
+            "records": len(logs),
+            "action_filter": action,
+            "entity_type_filter": entity_type,
+            "date_from": date_from.isoformat() if date_from else None,
+            "date_to": date_to.isoformat() if date_to else None,
+        },
+    )
+    db.commit()
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8" if export_format == "csv" else "application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/security-events", response_model=list[SecurityEventRead])
 def list_security_events(
     severity: SecuritySeverity | None = None,
@@ -375,7 +480,7 @@ def create_user(
     current_user: User = Depends(require_admin),
 ) -> User:
     institution = db.get(Institution, payload.institution_id)
-    if not institution:
+    if not institution or institution.deleted_at is not None or institution.status != InstitutionStatus.ACTIVE:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid institution")
     if current_user.role == UserRole.INSTITUTION_ADMIN:
         if payload.institution_id != current_user.institution_id:
@@ -424,10 +529,34 @@ def update_user(
     if current_user.role == UserRole.INSTITUTION_ADMIN:
         if user.institution_id != current_user.institution_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage another institution")
+        if user.role == UserRole.SYSTEM_ADMIN:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage a system admin")
         if payload.institution_id not in {None, current_user.institution_id} or payload.role == UserRole.SYSTEM_ADMIN:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot extend this user's privileges")
     if user.id == current_user.id and payload.status not in {None, UserStatus.ACTIVE}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot disable your own account")
+    if payload.institution_id is not None:
+        target_institution = db.get(Institution, payload.institution_id)
+        if target_institution is None or target_institution.deleted_at is not None or target_institution.status != InstitutionStatus.ACTIVE:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid institution")
+    removes_active_system_admin = (
+        user.role == UserRole.SYSTEM_ADMIN
+        and user.status == UserStatus.ACTIVE
+        and (payload.role not in {None, UserRole.SYSTEM_ADMIN} or payload.status not in {None, UserStatus.ACTIVE})
+    )
+    if removes_active_system_admin:
+        other_system_admins = db.scalar(
+            select(func.count())
+            .select_from(User)
+            .where(
+                User.id != user.id,
+                User.role == UserRole.SYSTEM_ADMIN,
+                User.status == UserStatus.ACTIVE,
+                User.deleted_at.is_(None),
+            )
+        ) or 0
+        if other_system_admins == 0:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="At least one active system admin is required")
     if payload.email and payload.email.lower() != user.email:
         if db.scalar(select(User).where(User.email == payload.email.lower(), User.id != user.id)):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User email already exists")
@@ -437,15 +566,44 @@ def update_user(
         if value is not None:
             setattr(user, field, value)
     if payload.status is not None and payload.status != UserStatus.ACTIVE:
-        now = datetime.now(timezone.utc)
-        for auth_session in db.scalars(select(AuthSession).where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None))):
-            auth_session.revoked_at = now
+        revoke_user_sessions(db, user.id)
     write_audit_log(db, action="USER_UPDATED", entity_type="user", entity_id=user.id, user_id=current_user.id,
                     institution_id=current_user.institution_id, ip_address=request.client.host if request.client else None,
                     metadata={key: str(value) for key, value in payload.model_dump(exclude_none=True).items()})
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.post("/users/{user_id}/sessions/revoke")
+def revoke_all_user_sessions(
+    user_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> dict[str, int]:
+    user = db.get(User, user_id)
+    if user is None or user.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if current_user.role == UserRole.INSTITUTION_ADMIN:
+        if user.institution_id != current_user.institution_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage another institution")
+        if user.role == UserRole.SYSTEM_ADMIN:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot manage a system admin")
+
+    revoked_sessions = revoke_user_sessions(db, user.id)
+    write_audit_log(
+        db,
+        action="USER_SESSIONS_REVOKED",
+        entity_type="user",
+        entity_id=user.id,
+        user_id=current_user.id,
+        institution_id=current_user.institution_id,
+        ip_address=request.client.host if request.client else None,
+        metadata={"revoked_sessions": revoked_sessions},
+    )
+    db.commit()
+    return {"revoked_sessions": revoked_sessions}
 
 
 @router.patch("/institutions/{institution_id}", response_model=InstitutionRead)
@@ -459,23 +617,50 @@ def update_institution(
     institution = db.get(Institution, institution_id)
     if institution is None or institution.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found")
+    if payload.type is not None and payload.type != institution.type:
+        _require_active_reference(db, "institution_type", payload.type.value)
     if payload.code and payload.code.upper() != institution.code:
         if db.scalar(select(Institution).where(Institution.code == payload.code.upper(), Institution.id != institution.id)):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Institution code already exists")
         institution.code = payload.code.upper()
+    deactivates_institution = payload.status is not None and payload.status != InstitutionStatus.ACTIVE
+    if deactivates_institution:
+        active_system_admins_here = db.scalar(
+            select(func.count()).select_from(User).where(
+                User.institution_id == institution.id,
+                User.role == UserRole.SYSTEM_ADMIN,
+                User.status == UserStatus.ACTIVE,
+                User.deleted_at.is_(None),
+            )
+        ) or 0
+        if active_system_admins_here:
+            active_system_admins_elsewhere = db.scalar(
+                select(func.count()).select_from(User).join(Institution, Institution.id == User.institution_id).where(
+                    User.institution_id != institution.id,
+                    User.role == UserRole.SYSTEM_ADMIN,
+                    User.status == UserStatus.ACTIVE,
+                    User.deleted_at.is_(None),
+                    Institution.status == InstitutionStatus.ACTIVE,
+                    Institution.deleted_at.is_(None),
+                )
+            ) or 0
+            if active_system_admins_elsewhere == 0:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="At least one active system admin institution is required")
     for field in ("name", "type", "status"):
         value = getattr(payload, field)
         if value is not None:
             setattr(institution, field, value)
-    if payload.status is not None and payload.status.value != "ACTIVE":
-        now = datetime.now(timezone.utc)
+    revoked_sessions = 0
+    if deactivates_institution:
         user_ids = select(User.id).where(User.institution_id == institution.id)
-        for auth_session in db.scalars(select(AuthSession).where(AuthSession.user_id.in_(user_ids), AuthSession.revoked_at.is_(None))):
-            auth_session.revoked_at = now
+        revoked_sessions = revoke_sessions_for_users(db, user_ids)
     write_audit_log(db, action="INSTITUTION_UPDATED", entity_type="institution", entity_id=institution.id,
                     user_id=current_user.id, institution_id=current_user.institution_id,
                     ip_address=request.client.host if request.client else None,
-                    metadata={key: str(value) for key, value in payload.model_dump(exclude_none=True).items()})
+                    metadata={
+                        **{key: str(value) for key, value in payload.model_dump(exclude_none=True).items()},
+                        "revoked_sessions": revoked_sessions,
+                    })
     db.commit()
     db.refresh(institution)
     return institution
@@ -550,6 +735,8 @@ def create_case(
     exists = db.scalar(select(ExchangeCase).where(ExchangeCase.reference == payload.reference.upper()))
     if exists:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Case reference already exists")
+    _require_active_reference(db, "case_priority", payload.priority.value)
+    _require_active_reference(db, "classification", payload.classification.value)
 
     sender = db.get(Institution, payload.sender_institution_id)
     receiver = db.get(Institution, payload.receiver_institution_id)
@@ -557,6 +744,8 @@ def create_case(
     creator = db.get(User, creator_id)
     if not sender or not receiver or not creator:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid sender, receiver, or creator")
+    if sender.status != InstitutionStatus.ACTIVE or receiver.status != InstitutionStatus.ACTIVE:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Sender and receiver institutions must be active")
     if current_user.role != UserRole.SYSTEM_ADMIN and payload.sender_institution_id != current_user.institution_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot create a case for another sender institution")
     if creator.institution_id != payload.sender_institution_id:
@@ -648,7 +837,8 @@ def receive_case(
     enforce_case_permission(db, current_user, exchange_case, "cases.receive")
     transition_case(exchange_case, CaseStatus.RECEIVED)
     exchange_case.received_at = datetime.now(timezone.utc)
-    _upsert_receipt(db, exchange_case, current_user)
+    if current_user.institution_id == exchange_case.receiver_institution_id:
+        _upsert_receipt(db, exchange_case, current_user)
     _record_workflow_action(db, exchange_case, current_user, "CASE_RECEIVED", "Demande réceptionnée")
     _audit_case_action(db, request, current_user, exchange_case, "CASE_RECEIVED")
     db.commit()
@@ -854,6 +1044,38 @@ def case_workflow(
     return list(db.scalars(select(WorkflowAction).where(WorkflowAction.workflow_id == workflow.id).order_by(WorkflowAction.created_at)))
 
 
+@router.get("/documents/purge-preview")
+def document_purge_preview(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_system_admin),
+) -> dict[str, int | bool]:
+    return {
+        "eligible_documents": count_purge_eligible_documents(db),
+        "automatic_purge_enabled": bool(get_platform_setting(db, "document_purge_enabled")),
+    }
+
+
+@router.post("/documents/purge-expired")
+def purge_documents(
+    payload: DocumentPurgeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_system_admin),
+) -> dict[str, int]:
+    result = purge_expired_documents(db)
+    write_audit_log(
+        db,
+        action="DOCUMENT_PURGE_RUN",
+        entity_type="attachment",
+        user_id=current_user.id,
+        institution_id=current_user.institution_id,
+        ip_address=request.client.host if request.client else None,
+        metadata={**result, "confirmation": payload.confirmation},
+    )
+    db.commit()
+    return result
+
+
 @router.post("/cases/{case_id}/attachments", response_model=AttachmentRead, status_code=status.HTTP_201_CREATED)
 async def upload_attachment(
     case_id: str,
@@ -866,6 +1088,8 @@ async def upload_attachment(
     exchange_case = _get_case(db, case_id)
     _require_case_access(exchange_case, current_user)
     enforce_case_permission(db, current_user, exchange_case, "documents.upload")
+    purpose = purpose.upper()
+    _require_active_reference(db, "attachment_purpose", purpose)
     version_data: dict[str, object] = {}
     if replaces_attachment_id:
         try:
@@ -952,24 +1176,32 @@ def list_receipts(case_id: str, db: Session = Depends(get_db),
 def acknowledge_case(case_id: str, request: Request, db: Session = Depends(get_db),
                      current_user: User = Depends(get_current_user)) -> Receipt:
     exchange_case = _get_case(db, case_id)
-    _require_receiver_access(exchange_case, current_user)
-    receipt = _upsert_receipt(db, exchange_case, current_user)
-    write_audit_log(db, action="CASE_ACKNOWLEDGED", entity_type="receipt", entity_id=receipt.id,
-                    user_id=current_user.id, institution_id=current_user.institution_id,
-                    ip_address=request.client.host if request.client else None,
-                    metadata={"case_id": str(exchange_case.id)})
+    _require_receipt_actor(exchange_case, current_user)
+    enforce_case_permission(db, current_user, exchange_case, "cases.read")
+    receipt, created = _upsert_receipt(db, exchange_case, current_user)
+    if created:
+        write_audit_log(db, action="CASE_ACKNOWLEDGED", entity_type="receipt", entity_id=receipt.id,
+                        user_id=current_user.id, institution_id=current_user.institution_id,
+                        ip_address=request.client.host if request.client else None,
+                        metadata={"case_id": str(exchange_case.id)})
     db.commit()
     db.refresh(receipt)
     return receipt
 
 
 @router.patch("/cases/{case_id}/receipts/read", response_model=ReceiptRead)
-def mark_case_read(case_id: str, db: Session = Depends(get_db),
+def mark_case_read(case_id: str, request: Request, db: Session = Depends(get_db),
                    current_user: User = Depends(get_current_user)) -> Receipt:
     exchange_case = _get_case(db, case_id)
-    _require_receiver_access(exchange_case, current_user)
-    receipt = _upsert_receipt(db, exchange_case, current_user)
-    receipt.read_at = receipt.read_at or datetime.now(timezone.utc)
+    _require_receipt_actor(exchange_case, current_user)
+    enforce_case_permission(db, current_user, exchange_case, "cases.read")
+    receipt, _created = _upsert_receipt(db, exchange_case, current_user)
+    if receipt.read_at is None:
+        receipt.read_at = datetime.now(timezone.utc)
+        write_audit_log(db, action="CASE_MARKED_READ", entity_type="receipt", entity_id=receipt.id,
+                        user_id=current_user.id, institution_id=current_user.institution_id,
+                        ip_address=request.client.host if request.client else None,
+                        metadata={"case_id": str(exchange_case.id)})
     db.commit()
     db.refresh(receipt)
     return receipt
@@ -1007,7 +1239,14 @@ def download_attachment(
     if attachment is None or attachment.deleted_at is not None or attachment.case_id != exchange_case.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
 
-    content = read_encrypted_file(attachment.file_path)
+    content = read_encrypted_file(
+        attachment.file_path,
+        storage_backend=attachment.storage_backend,
+        encryption_key_ref=attachment.encryption_key_ref,
+        encryption_algorithm=attachment.encryption_algorithm,
+        encrypted_data_key=attachment.encrypted_data_key,
+        encryption_nonce=attachment.encryption_nonce,
+    )
     _record_workflow_action(db, exchange_case, current_user, "DOCUMENT_DOWNLOADED", attachment.file_name)
     write_audit_log(
         db,
@@ -1099,7 +1338,7 @@ def run_due_alerts(
     current_user: User = Depends(require_roles(UserRole.SYSTEM_ADMIN, UserRole.INSTITUTION_ADMIN, UserRole.VALIDATOR)),
 ) -> dict[str, int]:
     institution_scope = None if current_user.role == UserRole.SYSTEM_ADMIN else current_user.institution_id
-    result = create_due_alerts(db, institution_id=institution_scope)
+    result = create_due_alerts(db, institution_id=institution_scope, due_soon_hours=int(get_platform_setting(db, "due_soon_hours")))
     write_audit_log(
         db,
         action="DUE_ALERTS_RUN",
@@ -1113,9 +1352,23 @@ def run_due_alerts(
     return result
 
 
+@router.get("/operations/lifecycle-status")
+def get_lifecycle_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, object]:
+    return lifecycle_status(db)
+
+
+@router.get("/integrations/scopes", response_model=list[ApiScopeRead])
+def list_api_scopes(current_user: User = Depends(require_admin)) -> list[dict[str, str]]:
+    return scope_views()
+
+
 @router.post("/integrations/api-clients", response_model=ApiClientCreated, status_code=status.HTTP_201_CREATED)
 def create_api_client(
     payload: ApiClientCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ) -> ApiClientCreated:
@@ -1124,10 +1377,11 @@ def create_api_client(
         if institution_id not in {None, current_user.institution_id}:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot create a client for another institution")
         institution_id = current_user.institution_id
-    allowed_scopes = {"cases:read", "cases:write"}
-    scopes = set(payload.scopes.split())
-    if not scopes.issubset(allowed_scopes):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown API scope")
+    if institution_id is not None:
+        institution = db.get(Institution, institution_id)
+        if institution is None or institution.deleted_at is not None or institution.status != InstitutionStatus.ACTIVE:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid API client institution")
+    scopes = normalize_scopes(payload.scopes)
     client_key = f"ib_{secrets.token_urlsafe(18)}"
     client_secret = secrets.token_urlsafe(32)
     client = ApiClient(
@@ -1135,9 +1389,20 @@ def create_api_client(
         institution_id=institution_id,
         client_key=client_key,
         secret_hash=hash_password(client_secret),
-        scopes=" ".join(sorted(scopes)),
+        scopes=" ".join(scopes),
     )
     db.add(client)
+    db.flush()
+    write_audit_log(
+        db,
+        action="API_CLIENT_CREATED",
+        entity_type="api_client",
+        entity_id=client.id,
+        user_id=current_user.id,
+        institution_id=current_user.institution_id,
+        ip_address=request.client.host if request.client else None,
+        metadata={"name": client.name, "institution_id": str(institution_id) if institution_id else None, "scopes": scopes},
+    )
     db.commit()
     db.refresh(client)
     return ApiClientCreated.model_validate(client).model_copy(update={"client_secret": client_secret})
@@ -1154,13 +1419,102 @@ def list_api_clients(
     return list(db.scalars(query.order_by(ApiClient.created_at.desc())))
 
 
+@router.patch("/integrations/api-clients/{client_id}", response_model=ApiClientRead)
+def update_api_client(
+    client_id: uuid.UUID,
+    payload: ApiClientUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> ApiClient:
+    client = _api_client_for_admin(db, client_id, current_user)
+    security_change = False
+    if payload.name is not None:
+        client.name = payload.name
+    if payload.scopes is not None:
+        normalized_scopes = normalize_scopes(payload.scopes)
+        serialized_scopes = " ".join(normalized_scopes)
+        security_change = serialized_scopes != client.scopes
+        client.scopes = serialized_scopes
+    if payload.active is not None:
+        security_change = security_change or payload.active != client.active
+        client.active = payload.active
+    if security_change:
+        client.token_version += 1
+    client.updated_at = datetime.now(timezone.utc)
+    write_audit_log(
+        db,
+        action="API_CLIENT_UPDATED",
+        entity_type="api_client",
+        entity_id=client.id,
+        user_id=current_user.id,
+        institution_id=current_user.institution_id,
+        ip_address=request.client.host if request.client else None,
+        metadata={"active": client.active, "scopes": client.scopes.split(), "token_version": client.token_version},
+    )
+    db.commit()
+    db.refresh(client)
+    return client
+
+
+@router.post("/integrations/api-clients/{client_id}/rotate-secret", response_model=ApiClientSecretRotated)
+def rotate_api_client_secret(
+    client_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> ApiClientSecretRotated:
+    client = _api_client_for_admin(db, client_id, current_user)
+    client_secret = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    client.secret_hash = hash_password(client_secret)
+    client.token_version += 1
+    client.secret_rotated_at = now
+    client.updated_at = now
+    write_audit_log(
+        db,
+        action="API_CLIENT_SECRET_ROTATED",
+        entity_type="api_client",
+        entity_id=client.id,
+        user_id=current_user.id,
+        institution_id=current_user.institution_id,
+        ip_address=request.client.host if request.client else None,
+        metadata={"token_version": client.token_version},
+    )
+    db.commit()
+    db.refresh(client)
+    return ApiClientSecretRotated.model_validate(client).model_copy(update={"client_secret": client_secret})
+
+
 @router.post("/integrations/token", response_model=ApiClientToken)
-def create_api_client_token(payload: ApiClientLogin, db: Session = Depends(get_db)) -> ApiClientToken:
+def create_api_client_token(payload: ApiClientLogin, request: Request, db: Session = Depends(get_db)) -> ApiClientToken:
     client = db.scalar(select(ApiClient).where(ApiClient.client_key == payload.client_key))
     if client is None or not client.active or not verify_password(payload.client_secret, client.secret_hash):
+        db.add(SecurityEvent(
+            institution_id=client.institution_id if client else None,
+            event_type="M2M_AUTH_FAILURE",
+            severity=SecuritySeverity.MEDIUM,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            details={"client_key_prefix": payload.client_key[:12], "known_client": client is not None},
+        ))
+        db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API client credentials")
-    scopes = client.scopes.split()
-    token, expires_in = create_access_token(str(client.id), {"typ": "api_client", "scopes": scopes})
+    if client.institution_id is not None:
+        institution = db.get(Institution, client.institution_id)
+        if institution is None or institution.deleted_at is not None or institution.status != InstitutionStatus.ACTIVE:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive API client institution")
+    scopes = normalize_scopes(client.scopes.split())
+    token, expires_in = create_access_token(
+        str(client.id),
+        {
+            "typ": "api_client",
+            "scopes": scopes,
+            "inst": str(client.institution_id) if client.institution_id else None,
+            "ver": client.token_version,
+        },
+        expires_minutes=int(get_platform_setting(db, "access_token_minutes")),
+    )
     client.last_used_at = datetime.now(timezone.utc)
     db.commit()
     return ApiClientToken(access_token=token, expires_in=expires_in, scopes=scopes)
@@ -1177,6 +1531,69 @@ def external_cases(
         query = query.where((ExchangeCase.sender_institution_id == client.institution_id) |
                             (ExchangeCase.receiver_institution_id == client.institution_id))
     return list(db.scalars(query.order_by(ExchangeCase.created_at.desc()).limit(limit)))
+
+
+@router.get("/external/cases/{case_id}", response_model=ExchangeCaseRead)
+def external_case(
+    case_id: str,
+    db: Session = Depends(get_db),
+    client: ApiClient = Depends(require_client_scope("cases:read")),
+) -> ExchangeCase:
+    exchange_case = _get_case(db, case_id)
+    _require_client_case_access(exchange_case, client)
+    return exchange_case
+
+
+@router.get("/external/cases/{case_id}/attachments", response_model=list[AttachmentRead])
+def external_case_attachments(
+    case_id: str,
+    db: Session = Depends(get_db),
+    client: ApiClient = Depends(require_client_scope("documents:read")),
+) -> list[Attachment]:
+    exchange_case = _get_case(db, case_id)
+    _require_client_case_access(exchange_case, client)
+    return list(db.scalars(select(Attachment).where(
+        Attachment.case_id == exchange_case.id,
+        Attachment.deleted_at.is_(None),
+    ).order_by(Attachment.uploaded_at)))
+
+
+@router.get("/external/cases/{case_id}/attachments/{attachment_id}/download")
+def external_download_attachment(
+    case_id: str,
+    attachment_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    client: ApiClient = Depends(require_client_scope("documents:read")),
+) -> Response:
+    exchange_case = _get_case(db, case_id)
+    _require_client_case_access(exchange_case, client)
+    attachment = db.get(Attachment, attachment_id)
+    if attachment is None or attachment.deleted_at is not None or attachment.case_id != exchange_case.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+    content = read_encrypted_file(
+        attachment.file_path,
+        storage_backend=attachment.storage_backend,
+        encryption_key_ref=attachment.encryption_key_ref,
+        encryption_algorithm=attachment.encryption_algorithm,
+        encrypted_data_key=attachment.encrypted_data_key,
+        encryption_nonce=attachment.encryption_nonce,
+    )
+    write_audit_log(
+        db,
+        action="M2M_DOCUMENT_DOWNLOADED",
+        entity_type="attachment",
+        entity_id=attachment.id,
+        institution_id=client.institution_id,
+        ip_address=request.client.host if request.client else None,
+        metadata={"api_client_id": str(client.id), "case_id": str(exchange_case.id), "checksum": attachment.checksum},
+    )
+    db.commit()
+    return Response(
+        content=content,
+        media_type=attachment.mime_type,
+        headers={"Content-Disposition": f'attachment; filename="{attachment.file_name}"'},
+    )
 
 
 @router.get("/governance/access-rules", response_model=list[AccessRuleRead])
@@ -1213,6 +1630,94 @@ def upsert_access_rule(payload: AccessRuleWrite, request: Request, db: Session =
     return rule
 
 
+@router.get("/settings", response_model=list[PlatformSettingRead])
+def list_platform_settings(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> list[dict[str, object]]:
+    return [setting_view(db, definition) for definition in SETTING_DEFINITIONS.values()]
+
+
+@router.put("/settings/{setting_key}", response_model=PlatformSettingRead)
+def update_platform_setting(
+    setting_key: str,
+    payload: PlatformSettingUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_system_admin),
+) -> dict[str, object]:
+    try:
+        stored = set_platform_setting(db, setting_key, payload.value, updated_by=current_user.id)
+    except PlatformSettingValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    db.flush()
+    definition = SETTING_DEFINITIONS[setting_key]
+    write_audit_log(
+        db,
+        action="PLATFORM_SETTING_UPDATED",
+        entity_type="platform_setting",
+        user_id=current_user.id,
+        institution_id=current_user.institution_id,
+        ip_address=request.client.host if request.client else None,
+        metadata={"key": setting_key, "value": stored.value},
+    )
+    db.commit()
+    return setting_view(db, definition)
+
+
+@router.get("/reference-data", response_model=list[ReferenceItemRead])
+def get_reference_data(
+    catalog: str | None = Query(default=None, max_length=50),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict[str, object]]:
+    try:
+        return list_reference_items(db, catalog)
+    except ReferenceDataValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.put("/reference-data/{catalog}/{code}", response_model=ReferenceItemRead)
+def put_reference_item(
+    catalog: str,
+    code: str,
+    payload: ReferenceItemUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_system_admin),
+) -> dict[str, object]:
+    try:
+        item = update_reference_item(
+            db,
+            catalog,
+            code,
+            label=payload.label,
+            description=payload.description,
+            active=payload.active,
+            sort_order=payload.sort_order,
+            updated_by=current_user.id,
+        )
+    except ReferenceDataValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    write_audit_log(
+        db,
+        action="REFERENCE_ITEM_UPDATED",
+        entity_type="reference_item",
+        user_id=current_user.id,
+        institution_id=current_user.institution_id,
+        ip_address=request.client.host if request.client else None,
+        metadata={
+            "catalog": item["catalog"],
+            "code": item["code"],
+            "label": item["label"],
+            "active": item["active"],
+            "sort_order": item["sort_order"],
+        },
+    )
+    db.commit()
+    return item
+
+
 def _get_case(db: Session, case_id: str) -> ExchangeCase:
     try:
         parsed_case_id = uuid.UUID(case_id)
@@ -1222,6 +1727,29 @@ def _get_case(db: Session, case_id: str) -> ExchangeCase:
     if exchange_case is None or exchange_case.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
     return exchange_case
+
+
+def _require_active_reference(db: Session, catalog: str, code: str) -> None:
+    try:
+        ensure_reference_active(db, catalog, code)
+    except ReferenceDataValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+def _api_client_for_admin(db: Session, client_id: uuid.UUID, current_user: User) -> ApiClient:
+    client = db.get(ApiClient, client_id)
+    if client is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API client not found")
+    if current_user.role != UserRole.SYSTEM_ADMIN and client.institution_id != current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API client not found")
+    return client
+
+
+def _require_client_case_access(exchange_case: ExchangeCase, client: ApiClient) -> None:
+    if client.institution_id is None:
+        return
+    if client.institution_id not in {exchange_case.sender_institution_id, exchange_case.receiver_institution_id}:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
 
 
 def _refresh_session_id(refresh_token: str) -> uuid.UUID:
@@ -1234,13 +1762,21 @@ def _refresh_session_id(refresh_token: str) -> uuid.UUID:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token") from exc
 
 
-def _upsert_receipt(db: Session, exchange_case: ExchangeCase, user: User) -> Receipt:
+def _upsert_receipt(db: Session, exchange_case: ExchangeCase, user: User) -> tuple[Receipt, bool]:
     receipt = db.scalar(select(Receipt).where(Receipt.case_id == exchange_case.id, Receipt.receiver_user_id == user.id))
     if receipt is None:
         receipt = Receipt(case_id=exchange_case.id, receiver_user_id=user.id)
         db.add(receipt)
         db.flush()
-    return receipt
+        return receipt, True
+    return receipt, False
+
+
+def _require_receipt_actor(exchange_case: ExchangeCase, current_user: User) -> None:
+    if current_user.institution_id != exchange_case.receiver_institution_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only a receiver institution member can acknowledge this case")
+    if exchange_case.status == CaseStatus.DRAFT:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A draft case cannot be acknowledged")
 
 
 def _require_case_access(exchange_case: ExchangeCase, current_user: User) -> None:

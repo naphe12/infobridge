@@ -18,6 +18,6 @@ class Notification(UUIDPrimaryKeyMixin, Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     level: Mapped[str] = mapped_column(String(40), nullable=False, default="INFO")
+    dedupe_key: Mapped[str | None] = mapped_column(String(255), unique=True, index=True, nullable=True)
     read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-

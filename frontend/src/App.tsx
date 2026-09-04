@@ -7,9 +7,7 @@ import {
   Bell,
   Building2,
   CheckCircle2,
-  ChevronDown,
   ClipboardCheck,
-  Clock3,
   Database,
   Download,
   Eye,
@@ -94,6 +92,7 @@ type FeatureKey =
   | "admin-institutions"
   | "create-institution"
   | "admin-governance"
+  | "admin-references"
   | "integrations";
 
 type AuthUser = {
@@ -149,6 +148,7 @@ type Attachment = {
   id: string;
   case_id: string | null;
   file_name: string;
+  storage_backend: string;
   mime_type: string;
   size_bytes: number;
   checksum: string;
@@ -158,6 +158,15 @@ type Attachment = {
   version: number;
   supersedes_id: string | null;
   uploaded_at: string;
+};
+
+type Receipt = {
+  id: string;
+  case_id: string;
+  receiver_user_id: string;
+  receiver_name: string;
+  received_at: string;
+  read_at: string | null;
 };
 
 type NotificationItem = {
@@ -172,14 +181,93 @@ type NotificationItem = {
   created_at: string;
 };
 
-type AuditLogItem = { id: string; action: string; entity_type: string; entity_id: string | null; ip_address: string | null; created_at: string };
+type AuditLogItem = {
+  id: string;
+  user_id: string | null;
+  institution_id: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  ip_address: string | null;
+  extra: Record<string, unknown>;
+  created_at: string;
+};
+
+type SecurityEventItem = {
+  id: string;
+  user_id: string | null;
+  institution_id: string | null;
+  event_type: string;
+  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  ip_address: string | null;
+  user_agent: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
+type LifecycleStatus = {
+  enabled: boolean;
+  due_alerts_enabled: boolean;
+  interval_seconds: number;
+  due_soon_hours: number;
+  running: boolean;
+  last_completed_at: string | null;
+  last_error: string | null;
+};
+
+type PlatformSetting = {
+  key: string;
+  value: boolean | number;
+  default_value: boolean | number;
+  value_type: "boolean" | "integer";
+  category: "SECURITY" | "RETENTION" | "AUTOMATION";
+  label: string;
+  description: string;
+  minimum: number | null;
+  maximum: number | null;
+  source: "database" | "environment";
+};
+
+type ReferenceItem = {
+  catalog: "institution_type" | "case_priority" | "classification" | "attachment_purpose";
+  catalog_label: string;
+  code: string;
+  label: string;
+  description: string | null;
+  active: boolean;
+  sort_order: number;
+  required_active: boolean;
+  source: "built_in" | "database";
+};
+
+type ApiScopeItem = {
+  code: "cases:read" | "documents:read";
+  label: string;
+  description: string;
+};
+
+type ApiClientItem = {
+  id: string;
+  name: string;
+  institution_id: string | null;
+  client_key: string;
+  scopes: ApiScopeItem["code"][];
+  active: boolean;
+  token_version: number;
+  created_at: string;
+  updated_at: string | null;
+  secret_rotated_at: string | null;
+  last_used_at: string | null;
+};
+
+type ApiClientCredential = ApiClientItem & { client_secret: string };
 
 type WorkflowDraft =
   | { mode: "response"; caseId: string; title: string }
   | { mode: "validate"; caseId: string; title: string; approved: boolean }
   | null;
 
-type AdminDraft = "institution" | "user" | null;
+type AdminDraft = "institution" | "user" | { institution: Institution } | { user: PlatformUser } | null;
 
 type QuickAccessAction = {
   description: string;
@@ -244,12 +332,6 @@ const cases: CaseItem[] = [
   },
 ];
 
-const auditTrail = [
-  { label: "Signature vérifiée", detail: "IB-2026-0048", tone: "success" },
-  { label: "Connexion sensible", detail: "Banque Centrale", tone: "warning" },
-  { label: "Pièce jointe chiffrée", detail: "2 documents", tone: "neutral" },
-];
-
 const navItems = [
   { id: "overview", label: "Vue d'ensemble", icon: LayoutDashboard },
   { id: "admin", label: "Administration", icon: Settings },
@@ -280,8 +362,16 @@ export function App() {
   const [assignees, setAssignees] = useState<PlatformUser[]>([]);
   const [exchangeCases, setExchangeCases] = useState<ExchangeCase[]>([]);
   const [attachmentsByCase, setAttachmentsByCase] = useState<Record<string, Attachment[]>>({});
+  const [receiptsByCase, setReceiptsByCase] = useState<Record<string, Receipt[]>>({});
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
+  const [securityEvents, setSecurityEvents] = useState<SecurityEventItem[]>([]);
+  const [lifecycleStatus, setLifecycleStatus] = useState<LifecycleStatus | null>(null);
+  const [platformSettings, setPlatformSettings] = useState<PlatformSetting[]>([]);
+  const [referenceItems, setReferenceItems] = useState<ReferenceItem[]>([]);
+  const [apiClients, setApiClients] = useState<ApiClientItem[]>([]);
+  const [apiScopes, setApiScopes] = useState<ApiScopeItem[]>([]);
+  const [apiClientCredential, setApiClientCredential] = useState<ApiClientCredential | null>(null);
   const [notificationLevel, setNotificationLevel] = useState("ALL");
   const [caseSearch, setCaseSearch] = useState("");
   const [caseStatusFilter, setCaseStatusFilter] = useState("ALL");
@@ -366,31 +456,53 @@ export function App() {
 
   async function loadWorkspaceData() {
     try {
-      const [dashboardData, caseData, institutionData, notificationData] = await Promise.all([
+      const [dashboardData, caseData, institutionData, notificationData, loadedLifecycleStatus, loadedReferenceItems] = await Promise.all([
         apiFetch<Dashboard>("/dashboard"),
         apiFetch<ExchangeCase[]>("/cases"),
         apiFetch<Institution[]>("/institutions"),
         apiFetch<NotificationItem[]>("/notifications"),
+        apiFetch<LifecycleStatus>("/operations/lifecycle-status"),
+        apiFetch<ReferenceItem[]>("/reference-data"),
       ]);
 
       setDashboard(dashboardData);
       setExchangeCases(caseData);
       setInstitutions(institutionData);
       setNotifications(notificationData);
+      setLifecycleStatus(loadedLifecycleStatus);
+      setReferenceItems(loadedReferenceItems);
 
       setAssignees(await apiFetch<PlatformUser[]>("/users/assignees").catch(() => []));
 
       if (userRole === "admin") {
-        setUsers(await apiFetch<PlatformUser[]>("/users"));
+        const [loadedUsers, loadedSettings, loadedApiClients, loadedApiScopes] = await Promise.all([
+          apiFetch<PlatformUser[]>("/users"),
+          apiFetch<PlatformSetting[]>("/settings"),
+          apiFetch<ApiClientItem[]>("/integrations/api-clients"),
+          apiFetch<ApiScopeItem[]>("/integrations/scopes"),
+        ]);
+        setUsers(loadedUsers);
+        setPlatformSettings(loadedSettings);
+        setApiClients(loadedApiClients);
+        setApiScopes(loadedApiScopes);
       }
       if (userRole === "admin" || userRole === "auditor") {
-        setAuditLogs(await apiFetch<AuditLogItem[]>("/audit-logs?limit=200"));
+        const [loadedAuditLogs, loadedSecurityEvents] = await Promise.all([
+          apiFetch<AuditLogItem[]>("/audit-logs?limit=200"),
+          apiFetch<SecurityEventItem[]>("/security-events?limit=200"),
+        ]);
+        setAuditLogs(loadedAuditLogs);
+        setSecurityEvents(loadedSecurityEvents);
       }
 
       const attachmentPairs = await Promise.all(
         caseData.map(async (item) => [item.id, await apiFetch<Attachment[]>(`/cases/${item.id}/attachments`)] as const),
       );
       setAttachmentsByCase(Object.fromEntries(attachmentPairs));
+      const receiptPairs = await Promise.all(
+        caseData.map(async (item) => [item.id, await apiFetch<Receipt[]>(`/cases/${item.id}/receipts`)] as const),
+      );
+      setReceiptsByCase(Object.fromEntries(receiptPairs));
     } catch (error) {
       setAppMessage(error instanceof Error ? error.message : "Impossible de charger les données.");
     }
@@ -414,7 +526,7 @@ export function App() {
         icon: Users,
         label: "Utilisateurs",
         value: dashboard.users,
-        delta: "92% MFA",
+        delta: `${dashboard.users} compte(s) recensé(s)`,
       },
       {
         icon: AlertTriangle,
@@ -602,15 +714,201 @@ export function App() {
   }
 
   async function handleUserStatus(userId: string, status: string) {
-    await apiFetch(`/users/${userId}`, { method: "PATCH", body: JSON.stringify({ status }) });
-    setAppMessage("Statut utilisateur mis à jour et sessions révoquées si nécessaire.");
-    await loadWorkspaceData();
+    const user = users.find((item) => item.id === userId);
+    if (status === "DISABLED" && !window.confirm(`Désactiver ${user?.full_name ?? "cet utilisateur"} et révoquer ses sessions ?`)) {
+      return;
+    }
+    try {
+      await apiFetch(`/users/${userId}`, { method: "PATCH", body: JSON.stringify({ status }) });
+      setAppMessage("Statut utilisateur mis à jour et sessions révoquées si nécessaire.");
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Modification du statut impossible.");
+    }
+  }
+
+  async function handleUpdateUser(userId: string, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const payload = {
+      email: String(formData.get("email") ?? "").trim(),
+      full_name: String(formData.get("full_name") ?? "").trim(),
+      institution_id: String(formData.get("institution_id") ?? ""),
+      role: String(formData.get("role") ?? "AGENT"),
+    };
+    try {
+      const user = await apiFetch<PlatformUser>(`/users/${userId}`, {
+        body: JSON.stringify(payload),
+        method: "PATCH",
+      });
+      setAdminDraft(null);
+      setActiveFeature("admin-users");
+      setAppMessage(`Utilisateur ${user.full_name} modifié.`);
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Modification utilisateur impossible.");
+    }
+  }
+
+  async function handleRevokeUserSessions(userId: string) {
+    const user = users.find((item) => item.id === userId);
+    if (!window.confirm(`Révoquer toutes les sessions de ${user?.full_name ?? "cet utilisateur"} ?`)) {
+      return;
+    }
+    try {
+      const result = await apiFetch<{ revoked_sessions: number }>(`/users/${userId}/sessions/revoke`, { method: "POST" });
+      if (currentUser?.id === userId) {
+        clearLocalSession();
+        return;
+      }
+      setAppMessage(`${result.revoked_sessions} session(s) révoquée(s).`);
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Révocation des sessions impossible.");
+    }
   }
 
   async function handleInstitutionStatus(institutionId: string, status: string) {
-    await apiFetch(`/institutions/${institutionId}`, { method: "PATCH", body: JSON.stringify({ status }) });
-    setAppMessage("Statut de l’institution mis à jour.");
-    await loadWorkspaceData();
+    const institution = institutions.find((item) => item.id === institutionId);
+    if (status === "SUSPENDED" && !window.confirm(`Suspendre ${institution?.name ?? "cette institution"} et révoquer toutes ses sessions ?`)) {
+      return;
+    }
+    try {
+      await apiFetch(`/institutions/${institutionId}`, { method: "PATCH", body: JSON.stringify({ status }) });
+      setAppMessage("Statut de l’institution mis à jour.");
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Modification du statut impossible.");
+    }
+  }
+
+  async function handleUpdateInstitution(institutionId: string, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const payload = {
+      code: String(formData.get("code") ?? "").trim(),
+      name: String(formData.get("name") ?? "").trim(),
+      type: String(formData.get("type") ?? "AGENCY"),
+    };
+    try {
+      const institution = await apiFetch<Institution>(`/institutions/${institutionId}`, {
+        body: JSON.stringify(payload),
+        method: "PATCH",
+      });
+      setAdminDraft(null);
+      setActiveFeature("admin-institutions");
+      setAppMessage(`Institution ${institution.name} modifiée.`);
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Modification institution impossible.");
+    }
+  }
+
+  async function handleUpdatePlatformSetting(key: string, value: boolean | number) {
+    try {
+      const updated = await apiFetch<PlatformSetting>(`/settings/${key}`, {
+        body: JSON.stringify({ value }),
+        method: "PUT",
+      });
+      setPlatformSettings((current) => current.map((item) => item.key === key ? updated : item));
+      setAppMessage(`Paramètre « ${updated.label} » enregistré.`);
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Modification du paramètre impossible.");
+    }
+  }
+
+  async function handleUpdateReferenceItem(item: ReferenceItem, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    try {
+      const updated = await apiFetch<ReferenceItem>(`/reference-data/${item.catalog}/${item.code}`, {
+        body: JSON.stringify({
+          label: String(formData.get("label") ?? "").trim(),
+          description: String(formData.get("description") ?? "").trim() || null,
+          active: String(formData.get("active") ?? "false") === "true",
+          sort_order: Number(formData.get("sort_order") ?? 0),
+        }),
+        method: "PUT",
+      });
+      setReferenceItems((current) => current.map((candidate) =>
+        candidate.catalog === updated.catalog && candidate.code === updated.code ? updated : candidate,
+      ));
+      setAppMessage(`Référentiel « ${updated.label} » enregistré.`);
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Modification du référentiel impossible.");
+    }
+  }
+
+  async function handleCreateApiClient(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    try {
+      const created = await apiFetch<ApiClientCredential>("/integrations/api-clients", {
+        body: JSON.stringify({
+          name: String(formData.get("name") ?? "").trim(),
+          institution_id: String(formData.get("institution_id") ?? "") || null,
+          scopes: formData.getAll("scopes").map(String),
+        }),
+        method: "POST",
+      });
+      setApiClientCredential(created);
+      event.currentTarget.reset();
+      setAppMessage(`Client M2M « ${created.name} » créé.`);
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Création du client M2M impossible.");
+    }
+  }
+
+  async function handleUpdateApiClient(client: ApiClientItem, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    try {
+      await apiFetch<ApiClientItem>(`/integrations/api-clients/${client.id}`, {
+        body: JSON.stringify({
+          name: String(formData.get("name") ?? "").trim(),
+          scopes: formData.getAll("scopes").map(String),
+        }),
+        method: "PATCH",
+      });
+      setAppMessage(`Client M2M « ${client.name} » mis à jour. Les anciens jetons ont été invalidés si les scopes ont changé.`);
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Modification du client M2M impossible.");
+    }
+  }
+
+  async function handleApiClientStatus(client: ApiClientItem) {
+    const nextActive = !client.active;
+    if (!nextActive && !window.confirm(`Suspendre le client M2M ${client.name} et invalider ses jetons ?`)) {
+      return;
+    }
+    try {
+      await apiFetch<ApiClientItem>(`/integrations/api-clients/${client.id}`, {
+        body: JSON.stringify({ active: nextActive }),
+        method: "PATCH",
+      });
+      setAppMessage(nextActive ? "Client M2M réactivé." : "Client M2M suspendu et jetons invalidés.");
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Modification du client M2M impossible.");
+    }
+  }
+
+  async function handleRotateApiClientSecret(client: ApiClientItem) {
+    if (!window.confirm(`Faire tourner le secret de ${client.name} ? Tous ses jetons actuels seront invalidés.`)) {
+      return;
+    }
+    try {
+      const credential = await apiFetch<ApiClientCredential>(`/integrations/api-clients/${client.id}/rotate-secret`, {
+        method: "POST",
+      });
+      setApiClientCredential(credential);
+      setAppMessage("Secret M2M renouvelé.");
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Rotation du secret impossible.");
+    }
   }
 
   async function handleWorkflowAction(caseId: string, action: "send" | "receive" | "start" | "send-response" | "close") {
@@ -622,6 +920,18 @@ export function App() {
       await loadWorkspaceData();
     } catch (error) {
       setAppMessage(error instanceof Error ? error.message : "Action impossible.");
+    }
+  }
+
+  async function handleReceipt(caseId: string, markRead: boolean) {
+    try {
+      await apiFetch<Receipt>(`/cases/${caseId}/receipts${markRead ? "/read" : ""}`, {
+        method: markRead ? "PATCH" : "POST",
+      });
+      setAppMessage(markRead ? "Dossier marqué comme lu." : "Accusé de réception enregistré.");
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Mise à jour de l’accusé impossible.");
     }
   }
 
@@ -719,6 +1029,35 @@ export function App() {
     }
   }
 
+  async function handleAuditExport(format: "csv" | "pdf", action: string) {
+    const params = new URLSearchParams({ format });
+    if (action !== "ALL") params.set("action", action);
+    const path = `/audit-logs/export?${params.toString()}`;
+    try {
+      const performRequest = (token: string) => fetch(`${apiUrl}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+      let response = await performRequest(accessToken);
+      if (response.status === 401) response = await performRequest(await refreshAccessToken());
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(payload?.detail ?? `Erreur API ${response.status}`);
+      }
+      const disposition = response.headers.get("Content-Disposition") ?? "";
+      const filename = disposition.match(/filename="?([^";]+)"?/)?.[1] ?? `infobridge-audit.${format}`;
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      setAppMessage(`Journal d’audit exporté en ${format.toUpperCase()}.`);
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Export du journal impossible.");
+    }
+  }
+
   function handleMissingAttachment(reference: string) {
     setActiveFeature("upload-document");
     setAppMessage(`Aucune pièce jointe pour ${reference}. Ajoutez d'abord un document au dossier.`);
@@ -780,7 +1119,7 @@ export function App() {
   }
 
   function openFeature(feature: FeatureKey) {
-    const section = getFeatureSection(feature, userRole === "admin");
+    const section = getFeatureSection(feature, userRole === "admin" || userRole === "auditor");
     setActiveSection(section);
     setActiveFeature(feature);
     setWorkflowDraft(null);
@@ -1018,21 +1357,39 @@ export function App() {
 
         <QuickAccessPanel isAdmin={userRole === "admin"} onOpenFeature={openFeature} />
 
-        {activeSection === "overview" ? <Overview metrics={metrics} /> : null}
+        {activeSection === "overview" ? <Overview auditLogs={auditLogs} metrics={metrics} securityEvents={securityEvents} /> : null}
         {appMessage ? <p className="app-message">{appMessage}</p> : null}
         {activeSection === "admin" ? (
           <AdminWorkspace
+            apiClientCredential={apiClientCredential}
+            apiClients={apiClients}
+            apiScopes={apiScopes}
             auditLogs={auditLogs}
             adminDraft={adminDraft}
-            dashboard={dashboard}
+            canEditPlatformSettings={currentUser?.role === "SYSTEM_ADMIN"}
+            currentUser={currentUser}
             institutions={institutions}
             onCancelAdminDraft={() => setAdminDraft(null)}
             onCreateInstitution={handleCreateInstitution}
             onCreateUser={handleCreateUser}
+            onExportAudit={handleAuditExport}
+            onApiClientCredentialClose={() => setApiClientCredential(null)}
+            onApiClientStatus={handleApiClientStatus}
+            onCreateApiClient={handleCreateApiClient}
             onInstitutionStatus={handleInstitutionStatus}
+            onUpdateInstitution={handleUpdateInstitution}
+            onUpdateApiClient={handleUpdateApiClient}
+            onUpdatePlatformSetting={handleUpdatePlatformSetting}
+            onUpdateReferenceItem={handleUpdateReferenceItem}
+            onRotateApiClientSecret={handleRotateApiClientSecret}
+            onRevokeUserSessions={handleRevokeUserSessions}
+            onUpdateUser={handleUpdateUser}
             onUserStatus={handleUserStatus}
             activeFeature={activeFeature}
             onOpenAdminDraft={setAdminDraft}
+            platformSettings={platformSettings}
+            referenceItems={referenceItems}
+            securityEvents={securityEvents}
             users={users}
           />
         ) : null}
@@ -1047,6 +1404,7 @@ export function App() {
             caseStatusFilter={caseStatusFilter}
             exchangeCases={exchangeCases}
             institutions={institutions}
+            lifecycleStatus={lifecycleStatus}
             onAssignCase={handleAssignCase}
             onArchiveCase={handleArchiveCase}
             onCreateCase={handleCreateCase}
@@ -1055,6 +1413,7 @@ export function App() {
             onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
             onMarkNotificationRead={handleMarkNotificationRead}
             onRunDueAlerts={handleRunDueAlerts}
+            onReceipt={handleReceipt}
             onSetNotificationLevel={setNotificationLevel}
             onSetCaseClassificationFilter={setCaseClassificationFilter}
             onSetCasePriorityFilter={setCasePriorityFilter}
@@ -1066,6 +1425,8 @@ export function App() {
             onUploadAttachment={handleUploadAttachment}
             onValidateResponse={openValidation}
             onWorkflowAction={handleWorkflowAction}
+            receiptsByCase={receiptsByCase}
+            referenceItems={referenceItems}
             onWorkflowDraftCancel={() => setWorkflowDraft(null)}
             onWorkflowDraftSubmit={handleWorkflowDraftSubmit}
             users={assignees}
@@ -1190,6 +1551,12 @@ function getQuickAccessGroups(isAdmin: boolean): QuickAccessGroup[] {
           icon: Settings,
           label: "Gouvernance",
         },
+        {
+          description: "Libellés, ordre et valeurs disponibles",
+          feature: "admin-references",
+          icon: SlidersHorizontal,
+          label: "Référentiels",
+        },
       ]
     : [];
 
@@ -1261,7 +1628,7 @@ function getQuickAccessGroups(isAdmin: boolean): QuickAccessGroup[] {
   ];
 }
 
-function getFeatureSection(feature: FeatureKey, isAdmin: boolean): AppSection {
+function getFeatureSection(feature: FeatureKey, canSupervise: boolean): AppSection {
   if (feature === "dashboard") {
     return "overview";
   }
@@ -1273,11 +1640,12 @@ function getFeatureSection(feature: FeatureKey, isAdmin: boolean): AppSection {
       "admin-institutions",
       "create-institution",
       "admin-governance",
+      "admin-references",
       "integrations",
       "backup",
       "audit",
     ].includes(feature) &&
-    isAdmin
+    canSupervise
   ) {
     return "admin";
   }
@@ -1309,6 +1677,7 @@ function getFeatureTitle(feature: FeatureKey) {
     "admin-institutions": "Administration des institutions",
     "create-institution": "Créer une institution",
     "admin-governance": "Administration de la plateforme",
+    "admin-references": "Référentiels configurables",
     integrations: "Interopérabilité",
   };
 
@@ -1373,6 +1742,8 @@ function CapabilityPanel({ feature, onRunDueAlerts }: { feature: FeatureKey; onR
 }
 
 function NotificationsPanel({
+  canRunDueAlerts,
+  lifecycleStatus,
   notificationLevel,
   notifications,
   onMarkAllRead,
@@ -1380,6 +1751,8 @@ function NotificationsPanel({
   onRunDueAlerts,
   onSetLevel,
 }: {
+  canRunDueAlerts: boolean;
+  lifecycleStatus: LifecycleStatus | null;
   notificationLevel: string;
   notifications: NotificationItem[];
   onMarkAllRead: () => void;
@@ -1395,6 +1768,11 @@ function NotificationsPanel({
         <div>
           <h2>Notifications et alertes</h2>
           <p>{unreadCount} notification(s) non lue(s) dans le filtre courant</p>
+          <small className="scheduler-status">
+            {lifecycleStatus?.enabled && lifecycleStatus.due_alerts_enabled
+              ? `Relances automatiques toutes les ${formatInterval(lifecycleStatus.interval_seconds)} · seuil ${lifecycleStatus.due_soon_hours} h${lifecycleStatus.last_completed_at ? ` · dernier passage ${formatDate(lifecycleStatus.last_completed_at)}` : ""}`
+              : "Relances automatiques désactivées"}
+          </small>
         </div>
         <div className="toolbar-actions">
           <select value={notificationLevel} onChange={(event) => onSetLevel(event.target.value)}>
@@ -1403,10 +1781,12 @@ function NotificationsPanel({
             <option value="WARNING">Avertissement</option>
             <option value="ERROR">Erreur</option>
           </select>
-          <button className="ghost-button" onClick={onRunDueAlerts} type="button">
-            <Bell size={17} />
-            Scanner échéances
-          </button>
+          {canRunDueAlerts ? (
+            <button className="ghost-button" onClick={onRunDueAlerts} type="button">
+              <Bell size={17} />
+              Exécuter maintenant
+            </button>
+          ) : null}
           <button className="ghost-button" onClick={onMarkAllRead} type="button">
             <CheckCircle2 size={17} />
             Tout lu
@@ -1442,7 +1822,15 @@ function NotificationsPanel({
   );
 }
 
-function Overview({ metrics }: { metrics: Array<{ icon: typeof Building2; label: string; value: number; delta: string }> }) {
+function Overview({
+  auditLogs,
+  metrics,
+  securityEvents,
+}: {
+  auditLogs: AuditLogItem[];
+  metrics: Array<{ icon: typeof Building2; label: string; value: number; delta: string }>;
+  securityEvents: SecurityEventItem[];
+}) {
   return (
     <>
       <section className="metric-grid" aria-label="Indicateurs">
@@ -1459,7 +1847,7 @@ function Overview({ metrics }: { metrics: Array<{ icon: typeof Building2; label:
 
       <section className="main-grid">
         <CaseQueue />
-        <InsightRail />
+        <InsightRail auditLogs={auditLogs} securityEvents={securityEvents} />
       </section>
     </>
   );
@@ -1468,41 +1856,80 @@ function Overview({ metrics }: { metrics: Array<{ icon: typeof Building2; label:
 function AdminWorkspace({
   activeFeature,
   adminDraft,
+  apiClientCredential,
+  apiClients,
+  apiScopes,
   auditLogs,
-  dashboard,
+  canEditPlatformSettings,
+  currentUser,
   institutions,
+  onApiClientCredentialClose,
+  onApiClientStatus,
   onCancelAdminDraft,
+  onCreateApiClient,
   onCreateInstitution,
   onCreateUser,
+  onExportAudit,
   onInstitutionStatus,
+  onUpdateInstitution,
+  onUpdateApiClient,
+  onUpdatePlatformSetting,
+  onUpdateReferenceItem,
+  onRotateApiClientSecret,
+  onRevokeUserSessions,
+  onUpdateUser,
   onUserStatus,
   onOpenAdminDraft,
+  platformSettings,
+  referenceItems,
+  securityEvents,
   users,
 }: {
   activeFeature: FeatureKey | null;
   adminDraft: AdminDraft;
+  apiClientCredential: ApiClientCredential | null;
+  apiClients: ApiClientItem[];
+  apiScopes: ApiScopeItem[];
   auditLogs: AuditLogItem[];
-  dashboard: Dashboard;
+  canEditPlatformSettings: boolean;
+  currentUser: AuthUser | null;
   institutions: Institution[];
+  onApiClientCredentialClose: () => void;
+  onApiClientStatus: (client: ApiClientItem) => void;
   onCancelAdminDraft: () => void;
+  onCreateApiClient: (event: FormEvent<HTMLFormElement>) => void;
   onCreateInstitution: (event: FormEvent<HTMLFormElement>) => void;
   onCreateUser: (event: FormEvent<HTMLFormElement>) => void;
+  onExportAudit: (format: "csv" | "pdf", action: string) => void;
   onInstitutionStatus: (institutionId: string, status: string) => void;
+  onUpdateInstitution: (institutionId: string, event: FormEvent<HTMLFormElement>) => void;
+  onUpdateApiClient: (client: ApiClientItem, event: FormEvent<HTMLFormElement>) => void;
+  onUpdatePlatformSetting: (key: string, value: boolean | number) => void;
+  onUpdateReferenceItem: (item: ReferenceItem, event: FormEvent<HTMLFormElement>) => void;
+  onRotateApiClientSecret: (client: ApiClientItem) => void;
+  onRevokeUserSessions: (userId: string) => void;
+  onUpdateUser: (userId: string, event: FormEvent<HTMLFormElement>) => void;
   onUserStatus: (userId: string, status: string) => void;
   onOpenAdminDraft: (draft: AdminDraft) => void;
+  platformSettings: PlatformSetting[];
+  referenceItems: ReferenceItem[];
+  securityEvents: SecurityEventItem[];
   users: PlatformUser[];
 }) {
+  const editedUser = adminDraft && typeof adminDraft === "object" && "user" in adminDraft ? adminDraft.user : null;
+  const editedInstitution = adminDraft && typeof adminDraft === "object" && "institution" in adminDraft ? adminDraft.institution : null;
+  const institutionTypeOptions = getReferenceOptions(referenceItems, "institution_type", true);
   return (
     <section className="admin-layout">
       {adminDraft ? (
         <section className="settings-panel">
           <div className="panel-toolbar">
             <div>
-              <h2>{adminDraft === "institution" ? "Nouvelle institution" : "Nouvel utilisateur"}</h2>
+              <h2>{adminDraft === "institution" ? "Nouvelle institution" : editedInstitution ? "Modifier l’institution" : editedUser ? "Modifier l’utilisateur" : "Nouvel utilisateur"}</h2>
               <p>
-                {adminDraft === "institution"
-                  ? "Enregistrer une institution participante."
-                  : "Créer un compte et lui attribuer un rôle."}
+                {adminDraft === "institution" || editedInstitution
+                  ? editedInstitution ? "Mettre à jour l’identité de l’institution." : "Enregistrer une institution participante."
+                  : editedUser ? "Mettre à jour son identité, son institution et son rôle." : "Créer un compte et lui attribuer un rôle."}
               </p>
             </div>
             <button className="ghost-button" onClick={onCancelAdminDraft} type="button">
@@ -1510,50 +1937,50 @@ function AdminWorkspace({
             </button>
           </div>
 
-          {adminDraft === "institution" ? (
-            <form className="request-form admin-form" onSubmit={onCreateInstitution}>
+          {adminDraft === "institution" || editedInstitution ? (
+            <form className="request-form admin-form" onSubmit={editedInstitution ? (event) => onUpdateInstitution(editedInstitution.id, event) : onCreateInstitution}>
               <label>
                 <span>Nom</span>
-                <input name="name" placeholder="Ministère, agence, banque..." required />
+                <input defaultValue={editedInstitution?.name} name="name" placeholder="Ministère, agence, banque..." required />
               </label>
               <label>
                 <span>Code</span>
-                <input name="code" placeholder="MINFIN" required />
+                <input defaultValue={editedInstitution?.code} name="code" placeholder="MINFIN" required />
               </label>
               <label>
                 <span>Type</span>
-                <select name="type">
-                  <option value="MINISTRY">Ministère</option>
-                  <option value="BANK">Banque</option>
-                  <option value="COMMUNE">Commune</option>
-                  <option value="AGENCY">Agence</option>
-                  <option value="OPERATOR">Opérateur</option>
-                  <option value="PRIVATE">Privé</option>
-                  <option value="OTHER">Autre</option>
+                <select defaultValue={editedInstitution?.type ?? "AGENCY"} name="type">
+                  {institutionTypeOptions.map((item) => (
+                    <option disabled={!item.active && item.code !== editedInstitution?.type} key={item.code} value={item.code}>
+                      {item.label}{item.active ? "" : " (désactivé)"}
+                    </option>
+                  ))}
                 </select>
               </label>
               <button className="primary-button" type="submit">
                 <Building2 size={18} />
-                Créer institution
+                {editedInstitution ? "Enregistrer" : "Créer institution"}
               </button>
             </form>
           ) : (
-            <form className="request-form admin-form" onSubmit={onCreateUser}>
+            <form className="request-form admin-form" onSubmit={editedUser ? (event) => onUpdateUser(editedUser.id, event) : onCreateUser}>
               <label>
                 <span>Nom complet</span>
-                <input name="full_name" placeholder="Nom de l'utilisateur" required />
+                <input defaultValue={editedUser?.full_name} name="full_name" placeholder="Nom de l'utilisateur" required />
               </label>
               <label>
                 <span>E-mail</span>
-                <input name="email" placeholder="user@institution.bi" required type="email" />
+                <input defaultValue={editedUser?.email} name="email" placeholder="user@institution.bi" required type="email" />
               </label>
-              <label>
-                <span>Mot de passe initial</span>
-                <input name="password" minLength={12} placeholder="Mot de passe temporaire" required type="password" />
-              </label>
+              {!editedUser ? (
+                <label>
+                  <span>Mot de passe initial</span>
+                  <input name="password" minLength={12} placeholder="Mot de passe temporaire" required type="password" />
+                </label>
+              ) : null}
               <label>
                 <span>Institution</span>
-                <select name="institution_id" required>
+                <select defaultValue={editedUser?.institution_id ?? ""} name="institution_id" required>
                   <option value="">Sélectionner</option>
                   {institutions.map((institution) => (
                     <option key={institution.id} value={institution.id}>
@@ -1564,7 +1991,8 @@ function AdminWorkspace({
               </label>
               <label>
                 <span>Rôle</span>
-                <select name="role">
+                <select defaultValue={editedUser?.role ?? "AGENT"} name="role">
+                  <option value="SYSTEM_ADMIN">Administrateur système</option>
                   <option value="AGENT">Agent</option>
                   <option value="VALIDATOR">Validateur</option>
                   <option value="CONSULTANT">Consultant</option>
@@ -1575,7 +2003,7 @@ function AdminWorkspace({
               </label>
               <button className="primary-button" type="submit">
                 <Users size={18} />
-                Créer utilisateur
+                {editedUser ? "Enregistrer" : "Créer utilisateur"}
               </button>
             </form>
           )}
@@ -1611,14 +2039,19 @@ function AdminWorkspace({
                 <div>
                   <strong>{institution.name}</strong>
                   <p>
-                    {institution.code} · {formatInstitutionType(institution.type)}
+                    {institution.code} · {referenceLabel(referenceItems, "institution_type", institution.type)}
                   </p>
                 </div>
                 <StatusPill label={institution.status === "ACTIVE" ? "Active" : institution.status} />
                 <small>{institution.type}</small>
-                <button className="ghost-button" onClick={() => onInstitutionStatus(institution.id, institution.status === "ACTIVE" ? "SUSPENDED" : "ACTIVE")} type="button">
-                  {institution.status === "ACTIVE" ? "Suspendre" : "Réactiver"}
-                </button>
+                <div className="row-actions">
+                  <button className="ghost-button" onClick={() => onOpenAdminDraft({ institution })} type="button">
+                    Modifier
+                  </button>
+                  <button className="ghost-button" onClick={() => onInstitutionStatus(institution.id, institution.status === "ACTIVE" ? "SUSPENDED" : "ACTIVE")} type="button">
+                    {institution.status === "ACTIVE" ? "Suspendre" : "Réactiver"}
+                  </button>
+                </div>
               </div>
             ))
           ) : (
@@ -1652,9 +2085,17 @@ function AdminWorkspace({
                 </div>
                 <StatusPill label={formatRole(user.role)} />
                 <small>{user.status}</small>
-                <button className="ghost-button" onClick={() => onUserStatus(user.id, user.status === "ACTIVE" ? "DISABLED" : "ACTIVE")} type="button">
-                  {user.status === "ACTIVE" ? "Désactiver" : "Réactiver"}
-                </button>
+                <div className="row-actions">
+                  <button className="ghost-button" onClick={() => onOpenAdminDraft({ user })} type="button">
+                    Modifier
+                  </button>
+                  <button className="ghost-button" onClick={() => onRevokeUserSessions(user.id)} type="button">
+                    Révoquer sessions
+                  </button>
+                  <button className="ghost-button" onClick={() => onUserStatus(user.id, user.status === "ACTIVE" ? "DISABLED" : "ACTIVE")} type="button">
+                    {user.status === "ACTIVE" ? "Désactiver" : "Réactiver"}
+                  </button>
+                </div>
               </div>
             ))
           ) : (
@@ -1665,42 +2106,307 @@ function AdminWorkspace({
       ) : null}
 
       {activeFeature === "admin-governance" || activeFeature === "access" ? (
-      <section className="settings-panel" id="admin-governance-panel">
-        <div className="panel-toolbar">
-          <div>
-            <h2>{activeFeature === "access" ? "Authentification et accès" : "Paramètres de gouvernance"}</h2>
-            <p>Configuration visible par les administrateurs de la plateforme</p>
-          </div>
-          <button className="ghost-button" type="button">
-            <Settings size={17} />
-            Modifier
-          </button>
-        </div>
+        <PlatformSettingsPanel
+          canEdit={canEditPlatformSettings}
+          onUpdate={onUpdatePlatformSetting}
+          settings={platformSettings}
+        />
+      ) : null}
 
-        <div className="settings-list">
-          <SettingRow label="Validation MFA obligatoire" value="Activée" tone="success" />
-          <SettingRow label="Durée de session administrateur" value="15 min" />
-          <SettingRow label="Institutions enregistrées" value={String(dashboard.institutions)} />
-          <SettingRow label="Événements sécurité" value={String(dashboard.security_events)} tone="warning" />
-        </div>
-      </section>
+      {activeFeature === "admin-references" ? (
+        <ReferenceDataPanel
+          canEdit={canEditPlatformSettings}
+          items={referenceItems}
+          onUpdate={onUpdateReferenceItem}
+        />
       ) : null}
 
       {activeFeature === "audit" ? (
-        <section className="settings-panel">
-          <div className="panel-toolbar"><div><h2>Journal d’audit</h2><p>{auditLogs.length} événement(s) récent(s)</p></div></div>
-          <div className="audit-list">
-            {auditLogs.map((log) => (
-              <div className="audit-item" key={log.id}><span className="audit-icon neutral"><History size={16} /></span><div><strong>{log.action}</strong><p>{log.entity_type}{log.entity_id ? ` · ${log.entity_id}` : ""} · {formatDate(log.created_at)}{log.ip_address ? ` · ${log.ip_address}` : ""}</p></div></div>
-            ))}
-            {!auditLogs.length ? <p className="empty-state">Aucun événement d’audit.</p> : null}
-          </div>
-        </section>
+        <AuditSecurityPanel auditLogs={auditLogs} onExport={onExportAudit} securityEvents={securityEvents} />
       ) : null}
 
-      {activeFeature === "integrations" || activeFeature === "backup" || activeFeature === "notifications" ? (
+      {activeFeature === "integrations" ? (
+        <ApiClientsPanel
+          clients={apiClients}
+          credential={apiClientCredential}
+          currentUser={currentUser}
+          institutions={institutions}
+          onCredentialClose={onApiClientCredentialClose}
+          onCreate={onCreateApiClient}
+          onRotateSecret={onRotateApiClientSecret}
+          onStatus={onApiClientStatus}
+          onUpdate={onUpdateApiClient}
+          scopes={apiScopes}
+        />
+      ) : null}
+
+      {activeFeature === "backup" || activeFeature === "notifications" ? (
         <CapabilityPanel feature={activeFeature} />
       ) : null}
+    </section>
+  );
+}
+
+function PlatformSettingsPanel({
+  canEdit,
+  onUpdate,
+  settings,
+}: {
+  canEdit: boolean;
+  onUpdate: (key: string, value: boolean | number) => void;
+  settings: PlatformSetting[];
+}) {
+  const categories: Array<{ key: PlatformSetting["category"]; title: string }> = [
+    { key: "SECURITY", title: "Sécurité et sessions" },
+    { key: "RETENTION", title: "Conservation documentaire" },
+    { key: "AUTOMATION", title: "Automatisation" },
+  ];
+  return (
+    <section className="settings-panel" id="admin-governance-panel">
+      <div className="panel-toolbar">
+        <div>
+          <h2>Paramètres de sécurité et de conservation</h2>
+          <p>{canEdit ? "Les modifications prennent effet immédiatement." : "Consultation seule — modification réservée à l’administrateur système."}</p>
+        </div>
+        <StatusPill label={canEdit ? "Modifiable" : "Lecture seule"} />
+      </div>
+      <div className="platform-settings-groups">
+        {categories.map((category) => (
+          <section key={category.key}>
+            <h3>{category.title}</h3>
+            <div className="settings-list">
+              {settings.filter((setting) => setting.category === category.key).map((setting) => (
+                <form
+                  className="platform-setting-row"
+                  key={setting.key}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    const rawValue = String(new FormData(event.currentTarget).get("value") ?? "");
+                    onUpdate(setting.key, setting.value_type === "boolean" ? rawValue === "true" : Number(rawValue));
+                  }}
+                >
+                  <div>
+                    <strong>{setting.label}</strong>
+                    <p>{setting.description}</p>
+                    <small>Source : {setting.source === "database" ? "base de données" : "environnement"}</small>
+                  </div>
+                  {setting.value_type === "boolean" ? (
+                    <select defaultValue={String(setting.value)} disabled={!canEdit} name="value">
+                      <option value="true">Activé</option>
+                      <option value="false">Désactivé</option>
+                    </select>
+                  ) : (
+                    <input
+                      defaultValue={Number(setting.value)}
+                      disabled={!canEdit}
+                      max={setting.maximum ?? undefined}
+                      min={setting.minimum ?? undefined}
+                      name="value"
+                      required
+                      type="number"
+                    />
+                  )}
+                  {canEdit ? <button className="ghost-button" type="submit">Enregistrer</button> : null}
+                </form>
+              ))}
+            </div>
+          </section>
+        ))}
+        <div className="setting-row">
+          <span>MFA obligatoire</span>
+          <strong className="warning">Non implémenté</strong>
+        </div>
+        {!settings.length ? <p className="empty-state">Aucun paramètre chargé. Appliquez la migration 0014.</p> : null}
+      </div>
+    </section>
+  );
+}
+
+function ReferenceDataPanel({
+  canEdit,
+  items,
+  onUpdate,
+}: {
+  canEdit: boolean;
+  items: ReferenceItem[];
+  onUpdate: (item: ReferenceItem, event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const catalogs = [...new Map(items.map((item) => [item.catalog, item.catalog_label])).entries()];
+  return (
+    <section className="settings-panel" id="admin-reference-data-panel">
+      <div className="panel-toolbar">
+        <div>
+          <h2>Référentiels configurables</h2>
+          <p>Personnalisez les libellés, descriptions, ordre d’affichage et valeurs proposées aux utilisateurs.</p>
+        </div>
+        <StatusPill label={canEdit ? "Modifiable" : "Lecture seule"} />
+      </div>
+      <div className="reference-catalogs">
+        {catalogs.map(([catalog, catalogLabel]) => (
+          <section className="reference-catalog" key={catalog}>
+            <h3>{catalogLabel}</h3>
+            <div className="reference-header" aria-hidden="true">
+              <span>Code et libellé</span><span>Description</span><span>Ordre</span><span>État</span><span />
+            </div>
+            {getReferenceOptions(items, catalog, true).map((item) => (
+              <form className="reference-row" key={item.code} onSubmit={(event) => onUpdate(item, event)}>
+                <label>
+                  <span>{item.code}</span>
+                  <input defaultValue={item.label} disabled={!canEdit} name="label" required />
+                </label>
+                <input
+                  aria-label={`Description de ${item.code}`}
+                  defaultValue={item.description ?? ""}
+                  disabled={!canEdit}
+                  name="description"
+                  placeholder="Description"
+                />
+                <input
+                  aria-label={`Ordre de ${item.code}`}
+                  defaultValue={item.sort_order}
+                  disabled={!canEdit}
+                  min="0"
+                  name="sort_order"
+                  required
+                  type="number"
+                />
+                <select
+                  aria-label={`État de ${item.code}`}
+                  defaultValue={String(item.active)}
+                  disabled={!canEdit || item.required_active}
+                  name="active"
+                >
+                  <option value="true">Active</option>
+                  <option value="false">Désactivée</option>
+                </select>
+                {item.required_active ? <input name="active" type="hidden" value="true" /> : null}
+                {canEdit ? <button className="ghost-button" type="submit">Enregistrer</button> : null}
+              </form>
+            ))}
+          </section>
+        ))}
+        {!items.length ? <p className="empty-state">Aucun référentiel chargé. Appliquez la migration 0015.</p> : null}
+      </div>
+    </section>
+  );
+}
+
+function ApiClientsPanel({
+  clients,
+  credential,
+  currentUser,
+  institutions,
+  onCreate,
+  onCredentialClose,
+  onRotateSecret,
+  onStatus,
+  onUpdate,
+  scopes,
+}: {
+  clients: ApiClientItem[];
+  credential: ApiClientCredential | null;
+  currentUser: AuthUser | null;
+  institutions: Institution[];
+  onCreate: (event: FormEvent<HTMLFormElement>) => void;
+  onCredentialClose: () => void;
+  onRotateSecret: (client: ApiClientItem) => void;
+  onStatus: (client: ApiClientItem) => void;
+  onUpdate: (client: ApiClientItem, event: FormEvent<HTMLFormElement>) => void;
+  scopes: ApiScopeItem[];
+}) {
+  const isSystemAdmin = currentUser?.role === "SYSTEM_ADMIN";
+  return (
+    <section className="settings-panel" id="api-clients-panel">
+      <div className="panel-toolbar">
+        <div>
+          <h2>Authentification machine à machine</h2>
+          <p>Clients techniques, secrets rotatifs et scopes limités au strict nécessaire.</p>
+        </div>
+        <StatusPill label={`${clients.filter((client) => client.active).length} actif(s)`} />
+      </div>
+
+      {credential ? (
+        <div className="credential-panel" role="status">
+          <div>
+            <strong>Identifiants affichés une seule fois</strong>
+            <p>Copiez le secret maintenant. Il ne pourra pas être récupéré ultérieurement.</p>
+          </div>
+          <dl>
+            <div><dt>Client ID</dt><dd><code>{credential.client_key}</code></dd></div>
+            <div><dt>Secret</dt><dd><code>{credential.client_secret}</code></dd></div>
+          </dl>
+          <button className="ghost-button" onClick={onCredentialClose} type="button">J’ai copié les identifiants</button>
+        </div>
+      ) : null}
+
+      <form className="request-form api-client-create" onSubmit={onCreate}>
+        <label>
+          <span>Nom du client</span>
+          <input name="name" placeholder="Connecteur GED" required />
+        </label>
+        <label>
+          <span>Institution</span>
+          {isSystemAdmin ? (
+            <select defaultValue="" name="institution_id">
+              <option value="">Toutes les institutions</option>
+              {institutions.filter((institution) => institution.status === "ACTIVE").map((institution) => (
+                <option key={institution.id} value={institution.id}>{institution.name}</option>
+              ))}
+            </select>
+          ) : (
+            <>
+              <input name="institution_id" type="hidden" value={currentUser?.institution_id ?? ""} />
+              <input disabled value={institutions.find((item) => item.id === currentUser?.institution_id)?.name ?? "Institution"} />
+            </>
+          )}
+        </label>
+        <fieldset className="scope-fieldset">
+          <legend>Scopes accordés</legend>
+          {scopes.map((scope) => (
+            <label key={scope.code} title={scope.description}>
+              <input name="scopes" type="checkbox" value={scope.code} />
+              <span>{scope.label}</span>
+              <small>{scope.code}</small>
+            </label>
+          ))}
+        </fieldset>
+        <button className="primary-button" type="submit"><KeyRound size={17} />Créer le client</button>
+      </form>
+
+      <div className="api-client-list">
+        {clients.map((client) => {
+          const institution = institutions.find((item) => item.id === client.institution_id);
+          return (
+            <form className="api-client-card" key={client.id} onSubmit={(event) => onUpdate(client, event)}>
+              <div className="api-client-heading">
+                <div>
+                  <input defaultValue={client.name} disabled={!client.active} name="name" required />
+                  <code>{client.client_key}</code>
+                </div>
+                <StatusPill label={client.active ? "Actif" : "Suspendu"} />
+              </div>
+              <p>{institution?.name ?? "Périmètre global"} · version de jeton {client.token_version}</p>
+              <fieldset className="scope-fieldset compact" disabled={!client.active}>
+                <legend>Scopes</legend>
+                {scopes.map((scope) => (
+                  <label key={scope.code} title={scope.description}>
+                    <input defaultChecked={client.scopes.includes(scope.code)} name="scopes" type="checkbox" value={scope.code} />
+                    <span>{scope.label}</span>
+                    <small>{scope.code}</small>
+                  </label>
+                ))}
+              </fieldset>
+              <small>Dernière utilisation : {client.last_used_at ? formatDateTime(client.last_used_at) : "jamais"}</small>
+              <div className="row-actions">
+                {client.active ? <button className="ghost-button" type="submit">Enregistrer les scopes</button> : null}
+                <button className="ghost-button" disabled={!client.active} onClick={() => onRotateSecret(client)} type="button">Tourner le secret</button>
+                <button className="ghost-button" onClick={() => onStatus(client)} type="button">{client.active ? "Suspendre" : "Réactiver"}</button>
+              </div>
+            </form>
+          );
+        })}
+        {!clients.length ? <p className="empty-state">Aucun client M2M enregistré.</p> : null}
+      </div>
     </section>
   );
 }
@@ -1715,6 +2421,7 @@ function DocumentsWorkspace({
   currentUser,
   exchangeCases,
   institutions,
+  lifecycleStatus,
   notificationLevel,
   notifications,
   onAssignCase,
@@ -1726,6 +2433,7 @@ function DocumentsWorkspace({
   onMarkNotificationRead,
   onMissingAttachment,
   onRunDueAlerts,
+  onReceipt,
   onSetCaseClassificationFilter,
   onSetCasePriorityFilter,
   onSetCaseSearch,
@@ -1734,8 +2442,10 @@ function DocumentsWorkspace({
   onUploadAttachment,
   onValidateResponse,
   onWorkflowAction,
+  receiptsByCase,
   onWorkflowDraftCancel,
   onWorkflowDraftSubmit,
+  referenceItems,
   users,
   workflowDraft,
 }: {
@@ -1748,6 +2458,7 @@ function DocumentsWorkspace({
   currentUser: AuthUser | null;
   exchangeCases: ExchangeCase[];
   institutions: Institution[];
+  lifecycleStatus: LifecycleStatus | null;
   notificationLevel: string;
   notifications: NotificationItem[];
   onAssignCase: (caseId: string, assignedTo: string) => void;
@@ -1759,6 +2470,7 @@ function DocumentsWorkspace({
   onMarkNotificationRead: (notificationId: string) => void;
   onMissingAttachment: (reference: string) => void;
   onRunDueAlerts: () => void;
+  onReceipt: (caseId: string, markRead: boolean) => void;
   onSetCaseClassificationFilter: (value: string) => void;
   onSetCasePriorityFilter: (value: string) => void;
   onSetCaseSearch: (value: string) => void;
@@ -1767,14 +2479,19 @@ function DocumentsWorkspace({
   onUploadAttachment: (event: FormEvent<HTMLFormElement>) => void;
   onValidateResponse: (caseId: string, approved: boolean) => void;
   onWorkflowAction: (caseId: string, action: "send" | "receive" | "start" | "send-response" | "close") => void;
+  receiptsByCase: Record<string, Receipt[]>;
   onWorkflowDraftCancel: () => void;
   onWorkflowDraftSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  referenceItems: ReferenceItem[];
   users: PlatformUser[];
   workflowDraft: WorkflowDraft;
 }) {
   const currentInstitution = institutions.find((institution) => institution.id === currentUser?.institution_id);
   const receivers = institutions.filter((institution) => institution.id !== currentUser?.institution_id);
   const availableReceivers = receivers.length ? receivers : institutions;
+  const classificationOptions = getReferenceOptions(referenceItems, "classification");
+  const priorityOptions = getReferenceOptions(referenceItems, "case_priority");
+  const attachmentPurposeOptions = getReferenceOptions(referenceItems, "attachment_purpose");
   const listFeatures: Array<FeatureKey | null> = [
     "cases",
     "secure-transmission",
@@ -1802,7 +2519,7 @@ function DocumentsWorkspace({
       (caseClassificationFilter === "ALL" || item.classification === caseClassificationFilter)
     );
   });
-  const classificationStats = getClassificationStats(exchangeCases);
+  const classificationStats = getClassificationStats(exchangeCases, referenceItems);
   const visibleNotifications =
     notificationLevel === "ALL"
       ? notifications
@@ -1892,21 +2609,14 @@ function DocumentsWorkspace({
           </label>
           <label>
             <span>Classification</span>
-            <select name="classification">
-              <option value="INTERNE">Interne</option>
-              <option value="CONFIDENTIEL">Confidentiel</option>
-              <option value="SECRET">Secret</option>
-              <option value="PUBLIC">Public</option>
+            <select defaultValue="INTERNE" name="classification">
+              {classificationOptions.map((item) => <option key={item.code} value={item.code}>{item.label}</option>)}
             </select>
           </label>
           <label>
             <span>Priorité</span>
-            <select name="priority">
-              <option value="NORMAL">Normale</option>
-              <option value="HIGH">Haute</option>
-              <option value="URGENT">Urgente</option>
-              <option value="CRITICAL">Critique</option>
-              <option value="LOW">Basse</option>
+            <select defaultValue="NORMAL" name="priority">
+              {priorityOptions.map((item) => <option key={item.code} value={item.code}>{item.label}</option>)}
             </select>
           </label>
           <label>
@@ -1951,10 +2661,8 @@ function DocumentsWorkspace({
           </label>
           <label>
             <span>Usage</span>
-            <select name="purpose">
-              <option value="REQUEST">Pièce de demande</option>
-              <option value="RESPONSE">Pièce de réponse</option>
-              <option value="EVIDENCE">Justificatif</option>
+            <select defaultValue="REQUEST" name="purpose">
+              {attachmentPurposeOptions.map((item) => <option key={item.code} value={item.code}>{item.label}</option>)}
             </select>
           </label>
           <label>
@@ -1980,7 +2688,7 @@ function DocumentsWorkspace({
         <div className="classification-grid">
           {classificationStats.map((item) => (
             <article key={item.level}>
-              <StatusPill label={formatClassification(item.level)} />
+              <StatusPill label={item.label} />
               <strong>{item.count}</strong>
               <span>{item.description}</span>
             </article>
@@ -2014,11 +2722,15 @@ function DocumentsWorkspace({
           </select>
           <select aria-label="Filtrer par priorité" onChange={(event) => onSetCasePriorityFilter(event.target.value)} value={casePriorityFilter}>
             <option value="ALL">Toutes les priorités</option>
-            <option value="CRITICAL">Critique</option><option value="URGENT">Urgente</option><option value="HIGH">Haute</option><option value="NORMAL">Normale</option><option value="LOW">Basse</option>
+            {getReferenceOptions(referenceItems, "case_priority", true).map((item) => (
+              <option key={item.code} value={item.code}>{item.label}</option>
+            ))}
           </select>
           <select aria-label="Filtrer par classification" onChange={(event) => onSetCaseClassificationFilter(event.target.value)} value={caseClassificationFilter}>
             <option value="ALL">Toutes classifications</option>
-            <option value="PUBLIC">Public</option><option value="INTERNE">Interne</option><option value="CONFIDENTIEL">Confidentiel</option><option value="SECRET">Secret</option>
+            {getReferenceOptions(referenceItems, "classification", true).map((item) => (
+              <option key={item.code} value={item.code}>{item.label}</option>
+            ))}
           </select>
         </div>
 
@@ -2054,10 +2766,13 @@ function DocumentsWorkspace({
           {filteredCases.length ? (
             filteredCases.map((item) => {
               const caseAttachments = attachmentsByCase[item.id] ?? [];
+              const caseReceipts = receiptsByCase[item.id] ?? [];
               const sender = institutions.find((institution) => institution.id === item.sender_institution_id);
               const receiver = institutions.find((institution) => institution.id === item.receiver_institution_id);
               const canAssign = users.length > 0 && ["RECEIVED", "IN_REVIEW"].includes(item.status);
               const primaryAttachment = caseAttachments[0];
+              const currentReceipt = caseReceipts.find((receipt) => receipt.receiver_user_id === currentUser?.id);
+              const canAcknowledge = item.status !== "DRAFT" && item.receiver_institution_id === currentUser?.institution_id;
 
               return (
                 <article className="document-row" key={item.id}>
@@ -2072,11 +2787,16 @@ function DocumentsWorkspace({
                     {caseAttachments.length ? (
                       <small>{caseAttachments.map((attachment) => `${attachment.file_name} (v${attachment.version})`).join(", ")}</small>
                     ) : null}
+                    {caseReceipts.length ? (
+                      <small className="receipt-summary">
+                        {caseReceipts.map((receipt) => `${receipt.receiver_name} : ${receipt.read_at ? `lu le ${formatDate(receipt.read_at)}` : `reçu le ${formatDate(receipt.received_at)}`}`).join(" · ")}
+                      </small>
+                    ) : null}
                   </div>
                   <span className="document-type">{formatStatus(item.status)}</span>
                   <span className="document-date">{formatDate(item.created_at)}</span>
                   <span className="document-size">{caseAttachments.length} pièce(s)</span>
-                  <StatusPill label={formatClassification(item.classification)} />
+                  <StatusPill label={referenceLabel(referenceItems, "classification", item.classification)} />
                   <button
                     aria-label={
                       primaryAttachment
@@ -2097,6 +2817,16 @@ function DocumentsWorkspace({
                     {primaryAttachment ? <Download size={18} /> : <UploadCloud size={18} />}
                   </button>
                   <div className="workflow-actions">
+                    {canAcknowledge && !currentReceipt ? (
+                      <button className="ghost-button" onClick={() => onReceipt(item.id, false)} type="button">
+                        Accuser réception
+                      </button>
+                    ) : null}
+                    {canAcknowledge && currentReceipt && !currentReceipt.read_at ? (
+                      <button className="ghost-button" onClick={() => onReceipt(item.id, true)} type="button">
+                        Marquer lu
+                      </button>
+                    ) : null}
                     {item.status === "DRAFT" ? (
                       <button className="ghost-button" onClick={() => onWorkflowAction(item.id, "send")} type="button">
                         Transmettre
@@ -2165,6 +2895,8 @@ function DocumentsWorkspace({
 
       {activeFeature === "notifications" ? (
         <NotificationsPanel
+          canRunDueAlerts={Boolean(currentUser && ["SYSTEM_ADMIN", "INSTITUTION_ADMIN", "VALIDATOR"].includes(currentUser.role))}
+          lifecycleStatus={lifecycleStatus}
           notificationLevel={notificationLevel}
           notifications={visibleNotifications}
           onMarkAllRead={onMarkAllNotificationsRead}
@@ -2251,39 +2983,119 @@ function CaseQueue() {
   );
 }
 
-function InsightRail() {
+function AuditSecurityPanel({
+  auditLogs,
+  onExport,
+  securityEvents,
+}: {
+  auditLogs: AuditLogItem[];
+  onExport: (format: "csv" | "pdf", action: string) => void;
+  securityEvents: SecurityEventItem[];
+}) {
+  const [auditAction, setAuditAction] = useState("ALL");
+  const [securitySeverity, setSecuritySeverity] = useState("ALL");
+  const auditActions = [...new Set(auditLogs.map((log) => log.action))].sort();
+  const visibleAuditLogs = auditAction === "ALL" ? auditLogs : auditLogs.filter((log) => log.action === auditAction);
+  const visibleSecurityEvents = securitySeverity === "ALL"
+    ? securityEvents
+    : securityEvents.filter((event) => event.severity === securitySeverity);
+
+  return (
+    <div className="supervision-grid">
+      <section className="settings-panel">
+        <div className="panel-toolbar">
+          <div>
+            <h2>Journal d’audit</h2>
+            <p>{visibleAuditLogs.length} action(s) affichée(s)</p>
+          </div>
+          <div className="toolbar-actions">
+            <select aria-label="Filtrer les actions d’audit" onChange={(event) => setAuditAction(event.target.value)} value={auditAction}>
+              <option value="ALL">Toutes les actions</option>
+              {auditActions.map((action) => <option key={action} value={action}>{formatAuditAction(action)}</option>)}
+            </select>
+            <button className="ghost-button" onClick={() => onExport("csv", auditAction)} type="button"><Download size={16} />CSV</button>
+            <button className="ghost-button" onClick={() => onExport("pdf", auditAction)} type="button"><Download size={16} />PDF</button>
+          </div>
+        </div>
+        <div className="audit-list detailed-event-list">
+          {visibleAuditLogs.map((log) => (
+            <article className="audit-item" key={log.id}>
+              <span className="audit-icon neutral"><History size={16} /></span>
+              <div>
+                <strong>{formatAuditAction(log.action)}</strong>
+                <p>{log.entity_type}{log.entity_id ? ` · ${log.entity_id}` : ""} · {formatDate(log.created_at)}</p>
+                <small>{formatEventContext(log.ip_address, log.extra)}</small>
+              </div>
+            </article>
+          ))}
+          {!visibleAuditLogs.length ? <p className="empty-state">Aucun événement d’audit dans ce filtre.</p> : null}
+        </div>
+      </section>
+
+      <section className="settings-panel">
+        <div className="panel-toolbar">
+          <div>
+            <h2>Événements de sécurité</h2>
+            <p>{visibleSecurityEvents.length} événement(s) affiché(s)</p>
+          </div>
+          <select aria-label="Filtrer la sévérité" onChange={(event) => setSecuritySeverity(event.target.value)} value={securitySeverity}>
+            <option value="ALL">Toutes les sévérités</option>
+            <option value="CRITICAL">Critique</option>
+            <option value="HIGH">Élevée</option>
+            <option value="MEDIUM">Moyenne</option>
+            <option value="LOW">Faible</option>
+          </select>
+        </div>
+        <div className="audit-list detailed-event-list">
+          {visibleSecurityEvents.map((event) => (
+            <article className="audit-item" key={event.id}>
+              <span className={`audit-icon ${securityTone(event.severity)}`}><AlertTriangle size={16} /></span>
+              <div>
+                <strong>{formatAuditAction(event.event_type)}</strong>
+                <p><StatusPill label={formatSeverity(event.severity)} /> · {formatDate(event.created_at)}</p>
+                <small>{formatEventContext(event.ip_address, event.details)}{event.user_agent ? ` · ${event.user_agent}` : ""}</small>
+              </div>
+            </article>
+          ))}
+          {!visibleSecurityEvents.length ? <p className="empty-state">Aucun événement de sécurité dans ce filtre.</p> : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function InsightRail({ auditLogs, securityEvents }: { auditLogs: AuditLogItem[]; securityEvents: SecurityEventItem[] }) {
+  const criticalCount = securityEvents.filter((event) => event.severity === "CRITICAL").length;
+  const highCount = securityEvents.filter((event) => event.severity === "HIGH").length;
   return (
     <aside className="insight-rail" aria-label="Contrôle sécurité">
       <section className="security-card">
         <div className="security-score">
           <Fingerprint size={24} />
-          <strong>98</strong>
+          <strong>{criticalCount + highCount}</strong>
         </div>
-        <h2>Confiance réseau</h2>
-        <p>Contrôles d'accès, signatures et pièces jointes restent dans le seuil attendu.</p>
-        <button className="secondary-button" type="button">
-          Rapport sécurité
-          <ChevronDown size={16} />
-        </button>
+        <h2>Alertes prioritaires</h2>
+        <p>{criticalCount} critique(s) et {highCount} élevée(s) dans les événements chargés.</p>
       </section>
 
       <section className="rail-section">
         <div className="rail-heading">
           <h2>Journal récent</h2>
-          <span>Temps réel</span>
+          <span>Dernier chargement</span>
         </div>
         <div className="audit-list">
-          {auditTrail.map((item) => (
-            <div className="audit-item" key={`${item.label}-${item.detail}`}>
-              <span className={`audit-icon ${item.tone}`}>
-                {item.tone === "success" ? <CheckCircle2 size={16} /> : <Clock3 size={16} />}
+          {auditLogs.slice(0, 5).map((item) => (
+            <div className="audit-item" key={item.id}>
+              <span className="audit-icon neutral">
+                <History size={16} />
               </span>
               <div>
-                <strong>{item.label}</strong>
-                <p>{item.detail}</p>
+                <strong>{formatAuditAction(item.action)}</strong>
+                <p>{item.entity_type} · {formatDate(item.created_at)}</p>
               </div>
             </div>
           ))}
+          {!auditLogs.length ? <p className="empty-state">Aucune activité récente.</p> : null}
         </div>
       </section>
 
@@ -2385,17 +3197,6 @@ function isAdminRole(role: AuthUser["role"]) {
   return role === "SYSTEM_ADMIN" || role === "INSTITUTION_ADMIN";
 }
 
-function formatClassification(classification: string) {
-  const labels: Record<string, string> = {
-    CONFIDENTIEL: "Confidentiel",
-    INTERNE: "Interne",
-    PUBLIC: "Public",
-    SECRET: "Secret",
-  };
-
-  return labels[classification] ?? classification;
-}
-
 function formatRole(role: AuthUser["role"]) {
   const labels: Record<AuthUser["role"], string> = {
     AGENT: "Agent",
@@ -2408,20 +3209,6 @@ function formatRole(role: AuthUser["role"]) {
   };
 
   return labels[role];
-}
-
-function formatInstitutionType(type: string) {
-  const labels: Record<string, string> = {
-    AGENCY: "Agence",
-    BANK: "Banque",
-    COMMUNE: "Commune",
-    MINISTRY: "Ministère",
-    OPERATOR: "Opérateur",
-    OTHER: "Autre",
-    PRIVATE: "Privé",
-  };
-
-  return labels[type] ?? type;
 }
 
 function formatStatus(status: string) {
@@ -2441,6 +3228,33 @@ function formatStatus(status: string) {
   };
 
   return labels[status] ?? status;
+}
+
+function formatAuditAction(action: string) {
+  return action.toLocaleLowerCase("fr").replace(/_/g, " ").replace(/^./, (letter: string) => letter.toLocaleUpperCase("fr"));
+}
+
+function formatSeverity(severity: SecurityEventItem["severity"]) {
+  return { CRITICAL: "Critique", HIGH: "Élevée", LOW: "Faible", MEDIUM: "Moyenne" }[severity];
+}
+
+function securityTone(severity: SecurityEventItem["severity"]) {
+  if (severity === "CRITICAL" || severity === "HIGH") return "critical";
+  if (severity === "MEDIUM") return "warning";
+  return "success";
+}
+
+function formatEventContext(ipAddress: string | null, metadata: Record<string, unknown>) {
+  const details = Object.entries(metadata)
+    .slice(0, 4)
+    .map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`);
+  return [ipAddress ? `IP ${ipAddress}` : null, ...details].filter(Boolean).join(" · ") || "Aucun détail supplémentaire";
+}
+
+function formatInterval(seconds: number) {
+  if (seconds % 3600 === 0) return `${seconds / 3600} h`;
+  if (seconds % 60 === 0) return `${seconds / 60} min`;
+  return `${seconds} s`;
 }
 
 function getCasesForFeature(items: ExchangeCase[], feature: FeatureKey | null, currentUserId: string | null) {
@@ -2479,18 +3293,26 @@ function getCasesForFeature(items: ExchangeCase[], feature: FeatureKey | null, c
   return items;
 }
 
-function getClassificationStats(items: ExchangeCase[]) {
-  const descriptions: Record<string, string> = {
-    CONFIDENTIEL: "Accès restreint",
-    INTERNE: "Usage institutionnel",
-    PUBLIC: "Diffusion ouverte",
-    SECRET: "Traitement renforcé",
-  };
+function getReferenceOptions(
+  items: ReferenceItem[],
+  catalog: ReferenceItem["catalog"],
+  includeInactive = false,
+) {
+  return items
+    .filter((item) => item.catalog === catalog && (includeInactive || item.active))
+    .sort((first, second) => first.sort_order - second.sort_order || first.code.localeCompare(second.code));
+}
 
-  return ["PUBLIC", "INTERNE", "CONFIDENTIEL", "SECRET"].map((level) => ({
-    count: items.filter((item) => item.classification === level).length,
-    description: descriptions[level],
-    level,
+function referenceLabel(items: ReferenceItem[], catalog: ReferenceItem["catalog"], code: string) {
+  return items.find((item) => item.catalog === catalog && item.code === code)?.label ?? code;
+}
+
+function getClassificationStats(items: ExchangeCase[], referenceItems: ReferenceItem[]) {
+  return getReferenceOptions(referenceItems, "classification", true).map((referenceItem) => ({
+    count: items.filter((item) => item.classification === referenceItem.code).length,
+    description: referenceItem.description ?? "",
+    label: referenceItem.label,
+    level: referenceItem.code,
   }));
 }
 
@@ -2526,6 +3348,10 @@ function getLifecycleRank(status: string) {
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("fr-FR", { dateStyle: "short" }).format(new Date(value));
+}
+
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat("fr-FR", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
 }
 
 function initials(name: string) {

@@ -30,8 +30,9 @@ def create_access_token(
     claims: dict[str, Any] | None = None,
     *,
     session_id: uuid.UUID | None = None,
+    expires_minutes: int | None = None,
 ) -> tuple[str, int]:
-    expires_delta = timedelta(minutes=settings.access_token_expire_minutes)
+    expires_delta = timedelta(minutes=expires_minutes or settings.access_token_expire_minutes)
     expire = datetime.now(timezone.utc) + expires_delta
     payload: dict[str, Any] = {"sub": subject, "exp": expire, "jti": str(uuid.uuid4())}
     if session_id:

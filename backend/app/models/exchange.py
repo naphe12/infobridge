@@ -59,13 +59,19 @@ class Attachment(UUIDPrimaryKeyMixin, SoftDeleteMixin, Base):
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     stored_file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    storage_backend: Mapped[str] = mapped_column(String(20), nullable=False, default="local")
     mime_type: Mapped[str] = mapped_column(String(150), nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     checksum: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
     purpose: Mapped[str] = mapped_column(String(80), nullable=False, default="REQUEST")
     encrypted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    encryption_key_ref: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    encryption_key_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    encryption_algorithm: Mapped[str] = mapped_column(String(40), nullable=False, default="FERNET")
+    encrypted_data_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    encryption_nonce: Mapped[str | None] = mapped_column(String(64), nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    purge_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
     message = relationship("Message", back_populates="attachments")
 
@@ -78,3 +84,9 @@ class Receipt(UUIDPrimaryKeyMixin, Base):
     receiver_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    receiver_user = relationship("User")
+
+    @property
+    def receiver_name(self) -> str:
+        return self.receiver_user.full_name

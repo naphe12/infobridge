@@ -1,6 +1,4 @@
-import hashlib
 import sys
-import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -9,7 +7,6 @@ from sqlalchemy.orm import Session
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.core.config import settings
 from app.core.security import hash_password
 from app.db.session import SessionLocal
 from app.models.audit import AuditLog
@@ -29,7 +26,7 @@ from app.models.notification import Notification
 from app.models.security import SecurityEvent
 from app.models.user import User
 from app.models.workflow import Workflow, WorkflowAction
-from app.services.documents import _fernet
+from app.services.documents import store_encrypted_content
 
 
 DEMO_PASSWORD = "ChangeMeStrong123!"
@@ -46,7 +43,7 @@ INSTITUTIONS = [
 
 
 USERS = [
-    ("admin@infobridge.local", "Admin Systeme", "MINFIN", UserRole.SYSTEM_ADMIN, True),
+    ("admin@infobridge.bi", "Admin Systeme", "MINFIN", UserRole.SYSTEM_ADMIN, True),
     ("admin.minfin@infobridge.local", "Aline Niyonzima", "MINFIN", UserRole.INSTITUTION_ADMIN, True),
     ("agent.minfin@infobridge.local", "Claude Irakoze", "MINFIN", UserRole.AGENT, True),
     ("validateur.minfin@infobridge.local", "David Bigirimana", "MINFIN", UserRole.VALIDATOR, True),
@@ -199,7 +196,7 @@ def main() -> None:
     print("Demo data ready.")
     print(f"Password for all demo users: {DEMO_PASSWORD}")
     print("Useful accounts:")
-    for email in ("admin@infobridge.local", "agent.minfin@infobridge.local", "validateur.minfin@infobridge.local"):
+    for email in ("admin@infobridge.bi", "agent.minfin@infobridge.local", "validateur.minfin@infobridge.local"):
         print(f"  - {email}")
 
 
@@ -219,6 +216,8 @@ def seed_users(db: Session, institutions: dict[str, Institution]) -> dict[str, U
     users: dict[str, User] = {}
     for email, full_name, institution_code, role, mfa_enabled in USERS:
         user = db.scalar(select(User).where(User.email == email))
+        if user is None and email == "admin@infobridge.bi":
+            user = db.scalar(select(User).where(User.email == "admin@infobridge.local"))
         if user is None:
             user = User(
                 institution_id=institutions[institution_code].id,
@@ -230,8 +229,22 @@ def seed_users(db: Session, institutions: dict[str, Institution]) -> dict[str, U
                 mfa_enabled=mfa_enabled,
             )
             db.add(user)
-            db.flush()
+        else:
+            user.institution_id = institutions[institution_code].id
+            user.full_name = full_name
+            user.email = email
+            user.password_hash = hash_password(DEMO_PASSWORD)
+            user.role = role
+            user.status = UserStatus.ACTIVE
+            user.failed_login_count = 0
+            user.mfa_enabled = mfa_enabled
+        db.flush()
         users[email] = user
+    legacy_admin = db.scalar(select(User).where(User.email == "admin@infobridge.local"))
+    canonical_admin = users.get("admin@infobridge.bi")
+    if legacy_admin is not None and canonical_admin is not None and legacy_admin.id != canonical_admin.id:
+        legacy_admin.status = UserStatus.DISABLED
+        legacy_admin.failed_login_count = 0
     return users
 
 
@@ -306,24 +319,18 @@ def ensure_attachment(db: Session, exchange_case: ExchangeCase, purpose: str) ->
         f"Objet: {exchange_case.subject}\n"
         f"Usage: {purpose}\n"
     ).encode()
-    storage_dir = Path(settings.document_storage_path)
-    storage_dir.mkdir(parents=True, exist_ok=True)
-    stored_file_name = f"{exchange_case.id}-{uuid.uuid4()}.txt.bin"
-    file_path = storage_dir / stored_file_name
-    file_path.write_bytes(_fernet().encrypt(content))
+    stored = store_encrypted_content(
+        content,
+        file_name=f"{exchange_case.reference.lower()}-{purpose.lower()}.txt",
+        case_id=exchange_case.id,
+        purpose=purpose,
+        mime_type="text/plain",
+    )
 
     db.add(
         Attachment(
             case_id=exchange_case.id,
-            file_name=f"{exchange_case.reference.lower()}-{purpose.lower()}.txt",
-            stored_file_name=stored_file_name,
-            file_path=str(file_path),
-            mime_type="text/plain",
-            size_bytes=len(content),
-            checksum=hashlib.sha256(content).hexdigest(),
-            purpose=purpose,
-            encrypted=True,
-            encryption_key_ref="settings.document_encryption_key" if settings.document_encryption_key else "settings.secret_key",
+            **stored,
         )
     )
 
@@ -360,7 +367,7 @@ def ensure_audit_log(db: Session, exchange_case: ExchangeCase, actor: User, acti
 
 def seed_security_events(db: Session, users: dict[str, User]) -> None:
     demos = [
-        ("LOGIN_SUCCESS", SecuritySeverity.LOW, "admin@infobridge.local"),
+        ("LOGIN_SUCCESS", SecuritySeverity.LOW, "admin@infobridge.bi"),
         ("DOCUMENT_DOWNLOAD", SecuritySeverity.MEDIUM, "agent.minfin@infobridge.local"),
         ("FAILED_LOGIN_THRESHOLD", SecuritySeverity.HIGH, "auditeur@infobridge.local"),
     ]
