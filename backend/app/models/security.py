@@ -21,3 +21,16 @@ class SecurityEvent(UUIDPrimaryKeyMixin, Base):
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
     details: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AuthSession(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "auth_sessions"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), index=True)
+    refresh_token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(INET, nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

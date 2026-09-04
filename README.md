@@ -71,6 +71,7 @@ DATABASE_URL=${{ Postgres.DATABASE_URL }}
 SECRET_KEY=replace-with-a-long-random-secret
 API_CORS_ORIGINS=https://your-frontend-domain.up.railway.app
 ACCESS_TOKEN_EXPIRE_MINUTES=15
+REFRESH_TOKEN_EXPIRE_DAYS=7
 ```
 
 The backend listens on Railway's injected `PORT` and exposes `/health`.

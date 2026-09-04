@@ -15,6 +15,14 @@ class UserCreate(BaseModel):
     role: UserRole
 
 
+class UserUpdate(BaseModel):
+    institution_id: uuid.UUID | None = None
+    full_name: str | None = Field(default=None, min_length=2, max_length=255)
+    email: EmailStr | None = None
+    role: UserRole | None = None
+    status: UserStatus | None = None
+
+
 class UserRead(BaseModel):
     id: uuid.UUID
     institution_id: uuid.UUID
@@ -35,9 +43,14 @@ class LoginRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
     expires_in: int
     user: UserRead
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str = Field(min_length=40, max_length=500)
 
 
 class BootstrapAdminRequest(BaseModel):

@@ -1,3 +1,6 @@
+import hashlib
+import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -22,10 +25,17 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def create_access_token(subject: str, claims: dict[str, Any] | None = None) -> tuple[str, int]:
+def create_access_token(
+    subject: str,
+    claims: dict[str, Any] | None = None,
+    *,
+    session_id: uuid.UUID | None = None,
+) -> tuple[str, int]:
     expires_delta = timedelta(minutes=settings.access_token_expire_minutes)
     expire = datetime.now(timezone.utc) + expires_delta
-    payload: dict[str, Any] = {"sub": subject, "exp": expire}
+    payload: dict[str, Any] = {"sub": subject, "exp": expire, "jti": str(uuid.uuid4())}
+    if session_id:
+        payload["sid"] = str(session_id)
     if claims:
         payload.update(claims)
     token = jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)
@@ -34,3 +44,12 @@ def create_access_token(subject: str, claims: dict[str, Any] | None = None) -> t
 
 def decode_access_token(token: str) -> dict[str, Any]:
     return jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
+
+
+def create_refresh_token(session_id: uuid.UUID) -> tuple[str, str]:
+    token = f"{session_id}.{secrets.token_urlsafe(48)}"
+    return token, hash_token(token)
+
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()

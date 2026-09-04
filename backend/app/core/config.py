@@ -6,6 +6,10 @@ class Settings(BaseSettings):
     api_cors_origins: str = "http://localhost:5173,https://infobridge-frontend-production.up.railway.app"
     secret_key: str = "change-me-in-production"
     access_token_expire_minutes: int = 15
+    refresh_token_expire_days: int = 7
+    lifecycle_scan_interval_seconds: int = 3600
+    auto_archive_after_days: int = 30
+    default_retention_days: int = 3650
     document_storage_path: str = "storage/documents"
     document_encryption_key: str | None = None
     document_max_upload_bytes: int = 25 * 1024 * 1024

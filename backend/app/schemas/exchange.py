@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.common import CasePriority, CaseStatus, Classification
 
@@ -57,6 +57,12 @@ class CaseResponseDraft(BaseModel):
 class CaseValidation(BaseModel):
     approved: bool
     comment: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def require_rejection_comment(self) -> "CaseValidation":
+        if not self.approved and not (self.comment or "").strip():
+            raise ValueError("A rejection comment is required")
+        return self
 
 
 class CaseArchive(BaseModel):

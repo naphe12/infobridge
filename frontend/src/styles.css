@@ -1541,6 +1541,30 @@ h2 {
   width: 100%;
 }
 
+.case-filters {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(150px, auto));
+  padding: 12px 17px;
+}
+
+.case-filters select {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: #334155;
+  min-height: 42px;
+  padding: 0 10px;
+}
+
+@media (max-width: 1100px) {
+  .case-filters {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 .document-list {
   display: grid;
 }

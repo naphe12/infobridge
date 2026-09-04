@@ -12,6 +12,13 @@ class InstitutionCreate(BaseModel):
     type: InstitutionType
 
 
+class InstitutionUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=255)
+    code: str | None = Field(default=None, min_length=2, max_length=50)
+    type: InstitutionType | None = None
+    status: InstitutionStatus | None = None
+
+
 class InstitutionRead(BaseModel):
     id: uuid.UUID
     name: str
@@ -21,4 +28,3 @@ class InstitutionRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
-

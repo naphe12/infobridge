@@ -41,7 +41,7 @@ import {
   Workflow,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 
 const apiUrl = import.meta.env.VITE_API_URL ?? "http://localhost:8000/api/v1";
@@ -70,7 +70,7 @@ type CaseItem = {
 };
 
 type AppSection = "overview" | "admin" | "documents";
-type UserRole = "admin" | "user";
+type UserRole = "admin" | "auditor" | "user";
 type FeatureKey =
   | "access"
   | "new-case"
@@ -106,6 +106,7 @@ type AuthUser = {
 
 type LoginResponse = {
   access_token: string;
+  refresh_token: string;
   expires_in: number;
   user: AuthUser;
 };
@@ -133,6 +134,7 @@ type ExchangeCase = {
   reference: string;
   subject: string;
   description: string | null;
+  response_body: string | null;
   sender_institution_id: string;
   receiver_institution_id: string;
   status: string;
@@ -166,6 +168,8 @@ type NotificationItem = {
   read: boolean;
   created_at: string;
 };
+
+type AuditLogItem = { id: string; action: string; entity_type: string; entity_id: string | null; ip_address: string | null; created_at: string };
 
 type WorkflowDraft =
   | { mode: "response"; caseId: string; title: string }
@@ -252,15 +256,18 @@ const navItems = [
 export function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(() => sessionStorage.getItem("infobridge_session") === "active");
   const [accessToken, setAccessToken] = useState(() => sessionStorage.getItem("infobridge_token") ?? "");
+  const refreshPromiseRef = useRef<Promise<string> | null>(null);
   const [userRole, setUserRole] = useState<UserRole>(() =>
-    sessionStorage.getItem("infobridge_role") === "admin" ? "admin" : "user",
+    sessionStorage.getItem("infobridge_role") === "admin"
+      ? "admin"
+      : sessionStorage.getItem("infobridge_role") === "auditor" ? "auditor" : "user",
   );
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
     const storedUser = sessionStorage.getItem("infobridge_user");
     return storedUser ? (JSON.parse(storedUser) as AuthUser) : null;
   });
   const [activeSection, setActiveSection] = useState<AppSection>(() =>
-    sessionStorage.getItem("infobridge_role") === "admin" ? "admin" : "documents",
+    sessionStorage.getItem("infobridge_role") === "admin" || sessionStorage.getItem("infobridge_role") === "auditor" ? "admin" : "documents",
   );
   const [loginError, setLoginError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -271,7 +278,12 @@ export function App() {
   const [exchangeCases, setExchangeCases] = useState<ExchangeCase[]>([]);
   const [attachmentsByCase, setAttachmentsByCase] = useState<Record<string, Attachment[]>>({});
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
   const [notificationLevel, setNotificationLevel] = useState("ALL");
+  const [caseSearch, setCaseSearch] = useState("");
+  const [caseStatusFilter, setCaseStatusFilter] = useState("ALL");
+  const [casePriorityFilter, setCasePriorityFilter] = useState("ALL");
+  const [caseClassificationFilter, setCaseClassificationFilter] = useState("ALL");
   const [workflowDraft, setWorkflowDraft] = useState<WorkflowDraft>(null);
   const [adminDraft, setAdminDraft] = useState<AdminDraft>(null);
   const [activeFeature, setActiveFeature] = useState<FeatureKey | null>(null);
@@ -291,14 +303,21 @@ export function App() {
   }, [accessToken, isAuthenticated, userRole]);
 
   async function apiFetch<T>(path: string, init: RequestInit = {}) {
-    const response = await fetch(`${apiUrl}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
-        ...init.headers,
-      },
-    });
+    const performRequest = (token: string) =>
+      fetch(`${apiUrl}${path}`, {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+          ...init.headers,
+        },
+      });
+
+    let response = await performRequest(accessToken);
+    if (response.status === 401 && !path.startsWith("/auth/")) {
+      const refreshedToken = await refreshAccessToken();
+      response = await performRequest(refreshedToken);
+    }
 
     if (!response.ok) {
       const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
@@ -306,6 +325,40 @@ export function App() {
     }
 
     return (await response.json()) as T;
+  }
+
+  async function refreshAccessToken(): Promise<string> {
+    if (refreshPromiseRef.current) {
+      return refreshPromiseRef.current;
+    }
+
+    const refreshToken = sessionStorage.getItem("infobridge_refresh_token");
+    if (!refreshToken) {
+      clearLocalSession();
+      throw new Error("Session expirée. Veuillez vous reconnecter.");
+    }
+
+    refreshPromiseRef.current = fetch(`${apiUrl}/auth/refresh`, {
+      body: JSON.stringify({ refresh_token: refreshToken }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          clearLocalSession();
+          throw new Error("Session expirée. Veuillez vous reconnecter.");
+        }
+        const data = (await response.json()) as LoginResponse;
+        sessionStorage.setItem("infobridge_token", data.access_token);
+        sessionStorage.setItem("infobridge_refresh_token", data.refresh_token);
+        setAccessToken(data.access_token);
+        return data.access_token;
+      })
+      .finally(() => {
+        refreshPromiseRef.current = null;
+      });
+
+    return refreshPromiseRef.current;
   }
 
   async function loadWorkspaceData() {
@@ -326,6 +379,9 @@ export function App() {
 
       if (userRole === "admin") {
         setUsers(await apiFetch<PlatformUser[]>("/users"));
+      }
+      if (userRole === "admin" || userRole === "auditor") {
+        setAuditLogs(await apiFetch<AuditLogItem[]>("/audit-logs?limit=200"));
       }
 
       const attachmentPairs = await Promise.all(
@@ -400,10 +456,11 @@ export function App() {
       }
 
       const data = (await response.json()) as LoginResponse;
-      const role = isAdminRole(data.user.role) ? "admin" : "user";
+      const role: UserRole = isAdminRole(data.user.role) ? "admin" : data.user.role === "AUDITOR" ? "auditor" : "user";
 
       sessionStorage.setItem("infobridge_session", "active");
       sessionStorage.setItem("infobridge_token", data.access_token);
+      sessionStorage.setItem("infobridge_refresh_token", data.refresh_token);
       sessionStorage.setItem("infobridge_role", role);
       sessionStorage.setItem("infobridge_user", JSON.stringify(data.user));
       setAccessToken(data.access_token);
@@ -541,7 +598,19 @@ export function App() {
     }
   }
 
-  async function handleWorkflowAction(caseId: string, action: "send" | "receive" | "send-response" | "close") {
+  async function handleUserStatus(userId: string, status: string) {
+    await apiFetch(`/users/${userId}`, { method: "PATCH", body: JSON.stringify({ status }) });
+    setAppMessage("Statut utilisateur mis à jour et sessions révoquées si nécessaire.");
+    await loadWorkspaceData();
+  }
+
+  async function handleInstitutionStatus(institutionId: string, status: string) {
+    await apiFetch(`/institutions/${institutionId}`, { method: "PATCH", body: JSON.stringify({ status }) });
+    setAppMessage("Statut de l’institution mis à jour.");
+    await loadWorkspaceData();
+  }
+
+  async function handleWorkflowAction(caseId: string, action: "send" | "receive" | "start" | "send-response" | "close") {
     try {
       await apiFetch<ExchangeCase>(`/cases/${caseId}/${action}`, {
         method: "POST",
@@ -726,9 +795,10 @@ export function App() {
     setAdminDraft(null);
   }
 
-  function handleLogout() {
+  function clearLocalSession() {
     sessionStorage.removeItem("infobridge_session");
     sessionStorage.removeItem("infobridge_token");
+    sessionStorage.removeItem("infobridge_refresh_token");
     sessionStorage.removeItem("infobridge_role");
     sessionStorage.removeItem("infobridge_user");
     setIsAuthenticated(false);
@@ -736,6 +806,17 @@ export function App() {
     setCurrentUser(null);
     setUserRole("user");
     setActiveSection("documents");
+  }
+
+  async function handleLogout() {
+    try {
+      await fetch(`${apiUrl}/auth/logout`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        method: "POST",
+      });
+    } finally {
+      clearLocalSession();
+    }
   }
 
   if (!isAuthenticated) {
@@ -854,7 +935,7 @@ export function App() {
                 key={item.label}
                 onClick={() => {
                   setActiveSection(item.id);
-                  setActiveFeature(null);
+                  setActiveFeature(userRole === "auditor" && item.id === "admin" ? "audit" : null);
                   setAdminDraft(null);
                 }}
                 type="button"
@@ -886,7 +967,17 @@ export function App() {
           <div className="topbar-actions">
             <label className="search-field">
               <Search size={18} />
-              <input aria-label="Rechercher" placeholder="Rechercher un dossier, une institution..." type="search" />
+              <input
+                aria-label="Rechercher"
+                onChange={(event) => {
+                  setCaseSearch(event.target.value);
+                  setActiveSection("documents");
+                  setActiveFeature("search");
+                }}
+                placeholder="Rechercher un dossier, une institution..."
+                type="search"
+                value={caseSearch}
+              />
             </label>
             <button
               aria-label="Notifications"
@@ -928,12 +1019,15 @@ export function App() {
         {appMessage ? <p className="app-message">{appMessage}</p> : null}
         {activeSection === "admin" ? (
           <AdminWorkspace
+            auditLogs={auditLogs}
             adminDraft={adminDraft}
             dashboard={dashboard}
             institutions={institutions}
             onCancelAdminDraft={() => setAdminDraft(null)}
             onCreateInstitution={handleCreateInstitution}
             onCreateUser={handleCreateUser}
+            onInstitutionStatus={handleInstitutionStatus}
+            onUserStatus={handleUserStatus}
             activeFeature={activeFeature}
             onOpenAdminDraft={setAdminDraft}
             users={users}
@@ -944,6 +1038,10 @@ export function App() {
             attachmentsByCase={attachmentsByCase}
             activeFeature={activeFeature}
             currentUser={currentUser}
+            caseClassificationFilter={caseClassificationFilter}
+            casePriorityFilter={casePriorityFilter}
+            caseSearch={caseSearch}
+            caseStatusFilter={caseStatusFilter}
             exchangeCases={exchangeCases}
             institutions={institutions}
             onAssignCase={handleAssignCase}
@@ -955,6 +1053,10 @@ export function App() {
             onMarkNotificationRead={handleMarkNotificationRead}
             onRunDueAlerts={handleRunDueAlerts}
             onSetNotificationLevel={setNotificationLevel}
+            onSetCaseClassificationFilter={setCaseClassificationFilter}
+            onSetCasePriorityFilter={setCasePriorityFilter}
+            onSetCaseSearch={setCaseSearch}
+            onSetCaseStatusFilter={setCaseStatusFilter}
             onDraftResponse={openDraftResponse}
             onDownloadAttachment={handleDownloadAttachment}
             onMissingAttachment={handleMissingAttachment}
@@ -1363,21 +1465,27 @@ function Overview({ metrics }: { metrics: Array<{ icon: typeof Building2; label:
 function AdminWorkspace({
   activeFeature,
   adminDraft,
+  auditLogs,
   dashboard,
   institutions,
   onCancelAdminDraft,
   onCreateInstitution,
   onCreateUser,
+  onInstitutionStatus,
+  onUserStatus,
   onOpenAdminDraft,
   users,
 }: {
   activeFeature: FeatureKey | null;
   adminDraft: AdminDraft;
+  auditLogs: AuditLogItem[];
   dashboard: Dashboard;
   institutions: Institution[];
   onCancelAdminDraft: () => void;
   onCreateInstitution: (event: FormEvent<HTMLFormElement>) => void;
   onCreateUser: (event: FormEvent<HTMLFormElement>) => void;
+  onInstitutionStatus: (institutionId: string, status: string) => void;
+  onUserStatus: (userId: string, status: string) => void;
   onOpenAdminDraft: (draft: AdminDraft) => void;
   users: PlatformUser[];
 }) {
@@ -1505,6 +1613,9 @@ function AdminWorkspace({
                 </div>
                 <StatusPill label={institution.status === "ACTIVE" ? "Active" : institution.status} />
                 <small>{institution.type}</small>
+                <button className="ghost-button" onClick={() => onInstitutionStatus(institution.id, institution.status === "ACTIVE" ? "SUSPENDED" : "ACTIVE")} type="button">
+                  {institution.status === "ACTIVE" ? "Suspendre" : "Réactiver"}
+                </button>
               </div>
             ))
           ) : (
@@ -1538,6 +1649,9 @@ function AdminWorkspace({
                 </div>
                 <StatusPill label={formatRole(user.role)} />
                 <small>{user.status}</small>
+                <button className="ghost-button" onClick={() => onUserStatus(user.id, user.status === "ACTIVE" ? "DISABLED" : "ACTIVE")} type="button">
+                  {user.status === "ACTIVE" ? "Désactiver" : "Réactiver"}
+                </button>
               </div>
             ))
           ) : (
@@ -1569,7 +1683,19 @@ function AdminWorkspace({
       </section>
       ) : null}
 
-      {activeFeature === "integrations" || activeFeature === "backup" || activeFeature === "audit" || activeFeature === "notifications" ? (
+      {activeFeature === "audit" ? (
+        <section className="settings-panel">
+          <div className="panel-toolbar"><div><h2>Journal d’audit</h2><p>{auditLogs.length} événement(s) récent(s)</p></div></div>
+          <div className="audit-list">
+            {auditLogs.map((log) => (
+              <div className="audit-item" key={log.id}><span className="audit-icon neutral"><History size={16} /></span><div><strong>{log.action}</strong><p>{log.entity_type}{log.entity_id ? ` · ${log.entity_id}` : ""} · {formatDate(log.created_at)}{log.ip_address ? ` · ${log.ip_address}` : ""}</p></div></div>
+            ))}
+            {!auditLogs.length ? <p className="empty-state">Aucun événement d’audit.</p> : null}
+          </div>
+        </section>
+      ) : null}
+
+      {activeFeature === "integrations" || activeFeature === "backup" || activeFeature === "notifications" ? (
         <CapabilityPanel feature={activeFeature} />
       ) : null}
     </section>
@@ -1579,6 +1705,10 @@ function AdminWorkspace({
 function DocumentsWorkspace({
   activeFeature,
   attachmentsByCase,
+  caseClassificationFilter,
+  casePriorityFilter,
+  caseSearch,
+  caseStatusFilter,
   currentUser,
   exchangeCases,
   institutions,
@@ -1593,6 +1723,10 @@ function DocumentsWorkspace({
   onMarkNotificationRead,
   onMissingAttachment,
   onRunDueAlerts,
+  onSetCaseClassificationFilter,
+  onSetCasePriorityFilter,
+  onSetCaseSearch,
+  onSetCaseStatusFilter,
   onSetNotificationLevel,
   onUploadAttachment,
   onValidateResponse,
@@ -1604,6 +1738,10 @@ function DocumentsWorkspace({
 }: {
   activeFeature: FeatureKey | null;
   attachmentsByCase: Record<string, Attachment[]>;
+  caseClassificationFilter: string;
+  casePriorityFilter: string;
+  caseSearch: string;
+  caseStatusFilter: string;
   currentUser: AuthUser | null;
   exchangeCases: ExchangeCase[];
   institutions: Institution[];
@@ -1618,10 +1756,14 @@ function DocumentsWorkspace({
   onMarkNotificationRead: (notificationId: string) => void;
   onMissingAttachment: (reference: string) => void;
   onRunDueAlerts: () => void;
+  onSetCaseClassificationFilter: (value: string) => void;
+  onSetCasePriorityFilter: (value: string) => void;
+  onSetCaseSearch: (value: string) => void;
+  onSetCaseStatusFilter: (value: string) => void;
   onSetNotificationLevel: (level: string) => void;
   onUploadAttachment: (event: FormEvent<HTMLFormElement>) => void;
   onValidateResponse: (caseId: string, approved: boolean) => void;
-  onWorkflowAction: (caseId: string, action: "send" | "receive" | "send-response" | "close") => void;
+  onWorkflowAction: (caseId: string, action: "send" | "receive" | "start" | "send-response" | "close") => void;
   onWorkflowDraftCancel: () => void;
   onWorkflowDraftSubmit: (event: FormEvent<HTMLFormElement>) => void;
   users: PlatformUser[];
@@ -1639,9 +1781,24 @@ function DocumentsWorkspace({
     "secure-response",
     "lifecycle",
     "classification",
+    "search",
   ];
   const shouldShowCases = listFeatures.includes(activeFeature);
-  const filteredCases = getCasesForFeature(exchangeCases, activeFeature, currentUser?.id ?? null);
+  const normalizedSearch = caseSearch.trim().toLocaleLowerCase("fr");
+  const filteredCases = getCasesForFeature(exchangeCases, activeFeature, currentUser?.id ?? null).filter((item) => {
+    const sender = institutions.find((institution) => institution.id === item.sender_institution_id);
+    const receiver = institutions.find((institution) => institution.id === item.receiver_institution_id);
+    const searchableText = [item.reference, item.subject, item.description, item.response_body, sender?.name, receiver?.name]
+      .filter(Boolean)
+      .join(" ")
+      .toLocaleLowerCase("fr");
+    return (
+      (!normalizedSearch || searchableText.includes(normalizedSearch)) &&
+      (caseStatusFilter === "ALL" || item.status === caseStatusFilter) &&
+      (casePriorityFilter === "ALL" || item.priority === casePriorityFilter) &&
+      (caseClassificationFilter === "ALL" || item.classification === caseClassificationFilter)
+    );
+  });
   const classificationStats = getClassificationStats(exchangeCases);
   const visibleNotifications =
     notificationLevel === "ALL"
@@ -1675,6 +1832,7 @@ function DocumentsWorkspace({
           </div>
           <StatusPill label={currentUser ? formatRole(currentUser.role) : "Observateur"} />
         </div>
+
         <div className="core-summary-grid">
           <article>
             <KeyRound size={20} />
@@ -1840,6 +1998,27 @@ function DocumentsWorkspace({
           </button>
         </div>
 
+        <div className="case-filters" aria-label="Filtres des demandes">
+          <label className="document-search">
+            <Search size={17} />
+            <input onChange={(event) => onSetCaseSearch(event.target.value)} placeholder="Référence, objet ou institution" type="search" value={caseSearch} />
+          </label>
+          <select aria-label="Filtrer par statut" onChange={(event) => onSetCaseStatusFilter(event.target.value)} value={caseStatusFilter}>
+            <option value="ALL">Tous les statuts</option>
+            {["DRAFT", "SENT", "RECEIVED", "ASSIGNED", "IN_PROGRESS", "PENDING_VALIDATION", "APPROVED", "REJECTED", "RESPONSE_SENT", "CLOSED", "ARCHIVED"].map((caseStatus) => (
+              <option key={caseStatus} value={caseStatus}>{formatStatus(caseStatus)}</option>
+            ))}
+          </select>
+          <select aria-label="Filtrer par priorité" onChange={(event) => onSetCasePriorityFilter(event.target.value)} value={casePriorityFilter}>
+            <option value="ALL">Toutes les priorités</option>
+            <option value="CRITICAL">Critique</option><option value="URGENT">Urgente</option><option value="HIGH">Haute</option><option value="NORMAL">Normale</option><option value="LOW">Basse</option>
+          </select>
+          <select aria-label="Filtrer par classification" onChange={(event) => onSetCaseClassificationFilter(event.target.value)} value={caseClassificationFilter}>
+            <option value="ALL">Toutes classifications</option>
+            <option value="PUBLIC">Public</option><option value="INTERNE">Interne</option><option value="CONFIDENTIEL">Confidentiel</option><option value="SECRET">Secret</option>
+          </select>
+        </div>
+
         {workflowDraft ? (
           <form className="workflow-draft-panel" onSubmit={onWorkflowDraftSubmit}>
             <div>
@@ -1874,7 +2053,7 @@ function DocumentsWorkspace({
               const caseAttachments = attachmentsByCase[item.id] ?? [];
               const sender = institutions.find((institution) => institution.id === item.sender_institution_id);
               const receiver = institutions.find((institution) => institution.id === item.receiver_institution_id);
-              const canAssign = users.length > 0 && ["RECEIVED", "SENT", "IN_REVIEW"].includes(item.status);
+              const canAssign = users.length > 0 && ["RECEIVED", "IN_REVIEW"].includes(item.status);
               const primaryAttachment = caseAttachments[0];
 
               return (
@@ -1935,7 +2114,12 @@ function DocumentsWorkspace({
                         ))}
                       </select>
                     ) : null}
-                    {["ASSIGNED", "IN_PROGRESS", "RECEIVED"].includes(item.status) ? (
+                    {item.status === "ASSIGNED" ? (
+                      <button className="ghost-button" onClick={() => onWorkflowAction(item.id, "start")} type="button">
+                        Démarrer
+                      </button>
+                    ) : null}
+                    {["IN_PROGRESS", "REJECTED"].includes(item.status) ? (
                       <button className="ghost-button" onClick={() => onDraftResponse(item.id)} type="button">
                         Répondre
                       </button>
@@ -2185,6 +2369,10 @@ function getSectionTitle(section: AppSection) {
 function getVisibleNavItems(role: UserRole) {
   if (role === "admin") {
     return navItems;
+  }
+
+  if (role === "auditor") {
+    return navItems.filter((item) => item.id === "admin" || item.id === "documents");
   }
 
   return navItems.filter((item) => item.id === "documents");
