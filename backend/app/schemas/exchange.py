@@ -59,6 +59,11 @@ class CaseValidation(BaseModel):
     comment: str | None = Field(default=None, max_length=2000)
 
 
+class CaseArchive(BaseModel):
+    retention_until: datetime | None = None
+    comment: str | None = Field(default=None, max_length=2000)
+
+
 class WorkflowActionRead(BaseModel):
     id: uuid.UUID
     workflow_id: uuid.UUID

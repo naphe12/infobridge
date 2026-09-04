@@ -53,6 +53,8 @@ type Dashboard = {
   security_events: number;
   closed_cases?: number;
   response_rate?: number;
+  overdue_cases?: number;
+  due_soon_cases?: number;
 };
 
 type CaseItem = {
@@ -99,7 +101,7 @@ type AuthUser = {
   institution_id: string;
   full_name: string;
   email: string;
-  role: "SYSTEM_ADMIN" | "INSTITUTION_ADMIN" | "AGENT" | "VALIDATOR" | "OBSERVER" | "AUDITOR";
+  role: "SYSTEM_ADMIN" | "INSTITUTION_ADMIN" | "AGENT" | "VALIDATOR" | "CONSULTANT" | "OBSERVER" | "AUDITOR";
 };
 
 type LoginResponse = {
@@ -151,6 +153,18 @@ type Attachment = {
   purpose: string;
   encrypted: boolean;
   uploaded_at: string;
+};
+
+type NotificationItem = {
+  id: string;
+  user_id: string | null;
+  institution_id: string | null;
+  case_id: string | null;
+  title: string;
+  body: string;
+  level: string;
+  read: boolean;
+  created_at: string;
 };
 
 type WorkflowDraft =
@@ -256,6 +270,8 @@ export function App() {
   const [assignees, setAssignees] = useState<PlatformUser[]>([]);
   const [exchangeCases, setExchangeCases] = useState<ExchangeCase[]>([]);
   const [attachmentsByCase, setAttachmentsByCase] = useState<Record<string, Attachment[]>>({});
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notificationLevel, setNotificationLevel] = useState("ALL");
   const [workflowDraft, setWorkflowDraft] = useState<WorkflowDraft>(null);
   const [adminDraft, setAdminDraft] = useState<AdminDraft>(null);
   const [activeFeature, setActiveFeature] = useState<FeatureKey | null>(null);
@@ -294,15 +310,17 @@ export function App() {
 
   async function loadWorkspaceData() {
     try {
-      const [dashboardData, caseData, institutionData] = await Promise.all([
+      const [dashboardData, caseData, institutionData, notificationData] = await Promise.all([
         apiFetch<Dashboard>("/dashboard"),
         apiFetch<ExchangeCase[]>("/cases"),
         apiFetch<Institution[]>("/institutions"),
+        apiFetch<NotificationItem[]>("/notifications"),
       ]);
 
       setDashboard(dashboardData);
       setExchangeCases(caseData);
       setInstitutions(institutionData);
+      setNotifications(notificationData);
 
       setAssignees(await apiFetch<PlatformUser[]>("/users/assignees").catch(() => []));
 
@@ -331,7 +349,7 @@ export function App() {
         icon: FileCheck2,
         label: "Dossiers actifs",
         value: dashboard.cases,
-        delta: "18 en revue",
+        delta: `${dashboard.overdue_cases ?? 0} en retard`,
       },
       {
         icon: Users,
@@ -343,11 +361,12 @@ export function App() {
         icon: AlertTriangle,
         label: "Alertes sécurité",
         value: dashboard.security_events,
-        delta: "3 critiques",
+        delta: `${dashboard.due_soon_cases ?? 0} échéance proche`,
       },
     ],
     [dashboard],
   );
+  const unreadNotificationCount = notifications.filter((notification) => !notification.read).length;
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -407,6 +426,7 @@ export function App() {
 
     const formData = new FormData(event.currentTarget);
     const file = formData.get("file");
+    const dueAt = String(formData.get("due_at") ?? "");
     const payload = {
       reference: String(formData.get("reference") ?? "").trim(),
       subject: String(formData.get("subject") ?? "").trim(),
@@ -415,6 +435,7 @@ export function App() {
       receiver_institution_id: String(formData.get("receiver_institution_id") ?? ""),
       priority: String(formData.get("priority") ?? "NORMAL"),
       classification: String(formData.get("classification") ?? "INTERNE"),
+      due_at: dueAt ? new Date(dueAt).toISOString() : null,
     };
 
     try {
@@ -529,6 +550,55 @@ export function App() {
       await loadWorkspaceData();
     } catch (error) {
       setAppMessage(error instanceof Error ? error.message : "Action impossible.");
+    }
+  }
+
+  async function handleArchiveCase(caseId: string) {
+    try {
+      await apiFetch<ExchangeCase>(`/cases/${caseId}/archive`, {
+        body: JSON.stringify({}),
+        method: "POST",
+      });
+      setAppMessage("Dossier archivé.");
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Archivage impossible.");
+    }
+  }
+
+  async function handleRunDueAlerts() {
+    try {
+      const result = await apiFetch<{ due_soon: number; overdue: number }>("/notifications/due-alerts/run", {
+        method: "POST",
+      });
+      setActiveFeature("notifications");
+      setAppMessage(`${result.due_soon} échéance(s) proche(s), ${result.overdue} retard(s) notifiés.`);
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Analyse des échéances impossible.");
+    }
+  }
+
+  async function handleMarkNotificationRead(notificationId: string) {
+    try {
+      await apiFetch<NotificationItem>(`/notifications/${notificationId}/read`, {
+        method: "PATCH",
+      });
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Mise à jour notification impossible.");
+    }
+  }
+
+  async function handleMarkAllNotificationsRead() {
+    try {
+      const result = await apiFetch<{ updated: number }>("/notifications/read-all", {
+        method: "PATCH",
+      });
+      setAppMessage(`${result.updated} notification(s) marquée(s) comme lue(s).`);
+      await loadWorkspaceData();
+    } catch (error) {
+      setAppMessage(error instanceof Error ? error.message : "Mise à jour notifications impossible.");
     }
   }
 
@@ -818,8 +888,17 @@ export function App() {
               <Search size={18} />
               <input aria-label="Rechercher" placeholder="Rechercher un dossier, une institution..." type="search" />
             </label>
-            <button aria-label="Notifications" className="icon-button" type="button">
+            <button
+              aria-label="Notifications"
+              className="icon-button notification-trigger"
+              onClick={() => {
+                setActiveFeature("notifications");
+                setActiveSection("documents");
+              }}
+              type="button"
+            >
               <Bell size={18} />
+              {unreadNotificationCount ? <span>{unreadNotificationCount}</span> : null}
             </button>
             <button
               className="primary-button"
@@ -868,7 +947,14 @@ export function App() {
             exchangeCases={exchangeCases}
             institutions={institutions}
             onAssignCase={handleAssignCase}
+            onArchiveCase={handleArchiveCase}
             onCreateCase={handleCreateCase}
+            notificationLevel={notificationLevel}
+            notifications={notifications}
+            onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
+            onMarkNotificationRead={handleMarkNotificationRead}
+            onRunDueAlerts={handleRunDueAlerts}
+            onSetNotificationLevel={setNotificationLevel}
             onDraftResponse={openDraftResponse}
             onDownloadAttachment={handleDownloadAttachment}
             onMissingAttachment={handleMissingAttachment}
@@ -1154,7 +1240,7 @@ function FeatureIntro({ description, icon, title }: { description: string; icon:
   );
 }
 
-function CapabilityPanel({ feature }: { feature: FeatureKey }) {
+function CapabilityPanel({ feature, onRunDueAlerts }: { feature: FeatureKey; onRunDueAlerts?: () => void }) {
   return (
     <section className="capability-panel">
       <div className="panel-toolbar">
@@ -1162,13 +1248,90 @@ function CapabilityPanel({ feature }: { feature: FeatureKey }) {
           <h2>{getFeatureTitle(feature)}</h2>
           <p>Module prévu dans la trajectoire fonctionnelle InfoBridge.</p>
         </div>
+        {feature === "notifications" && onRunDueAlerts ? (
+          <button className="ghost-button" onClick={onRunDueAlerts} type="button">
+            <Bell size={17} />
+            Scanner échéances
+          </button>
+        ) : null}
       </div>
       <div className="capability-body">
-        <StatusPill label="À brancher" />
+        <StatusPill label={feature === "notifications" ? "Branché" : "À brancher"} />
         <p>
-          L'accès rapide est déjà présent pour structurer l'interface. La prochaine étape consiste à relier ce module à
-          ses écrans et endpoints dédiés.
+          {feature === "notifications"
+            ? "Les alertes d'échéance proche et de retard peuvent être générées à partir des dossiers ouverts."
+            : "L'accès rapide est déjà présent pour structurer l'interface. La prochaine étape consiste à relier ce module à ses écrans et endpoints dédiés."}
         </p>
+      </div>
+    </section>
+  );
+}
+
+function NotificationsPanel({
+  notificationLevel,
+  notifications,
+  onMarkAllRead,
+  onMarkRead,
+  onRunDueAlerts,
+  onSetLevel,
+}: {
+  notificationLevel: string;
+  notifications: NotificationItem[];
+  onMarkAllRead: () => void;
+  onMarkRead: (notificationId: string) => void;
+  onRunDueAlerts: () => void;
+  onSetLevel: (level: string) => void;
+}) {
+  const unreadCount = notifications.filter((notification) => !notification.read).length;
+
+  return (
+    <section className="notifications-panel" id="notifications-panel">
+      <div className="panel-toolbar">
+        <div>
+          <h2>Notifications et alertes</h2>
+          <p>{unreadCount} notification(s) non lue(s) dans le filtre courant</p>
+        </div>
+        <div className="toolbar-actions">
+          <select value={notificationLevel} onChange={(event) => onSetLevel(event.target.value)}>
+            <option value="ALL">Tous niveaux</option>
+            <option value="INFO">Information</option>
+            <option value="WARNING">Avertissement</option>
+            <option value="ERROR">Erreur</option>
+          </select>
+          <button className="ghost-button" onClick={onRunDueAlerts} type="button">
+            <Bell size={17} />
+            Scanner échéances
+          </button>
+          <button className="ghost-button" onClick={onMarkAllRead} type="button">
+            <CheckCircle2 size={17} />
+            Tout lu
+          </button>
+        </div>
+      </div>
+
+      <div className="notification-list">
+        {notifications.length ? (
+          notifications.map((notification) => (
+            <article className={notification.read ? "notification-row read" : "notification-row"} key={notification.id}>
+              <span className={`notification-level ${notification.level.toLowerCase()}`}>
+                {notification.level === "ERROR" ? <AlertTriangle size={17} /> : <Bell size={17} />}
+              </span>
+              <div>
+                <strong>{notification.title}</strong>
+                <p>{notification.body}</p>
+                <small>{formatDate(notification.created_at)}</small>
+              </div>
+              <StatusPill label={notification.read ? "Lue" : "Non lue"} />
+              {!notification.read ? (
+                <button className="ghost-button" onClick={() => onMarkRead(notification.id)} type="button">
+                  Marquer lu
+                </button>
+              ) : null}
+            </article>
+          ))
+        ) : (
+          <p className="empty-state">Aucune notification dans ce filtre.</p>
+        )}
       </div>
     </section>
   );
@@ -1293,6 +1456,7 @@ function AdminWorkspace({
                 <select name="role">
                   <option value="AGENT">Agent</option>
                   <option value="VALIDATOR">Validateur</option>
+                  <option value="CONSULTANT">Consultant</option>
                   <option value="OBSERVER">Observateur</option>
                   <option value="AUDITOR">Auditeur</option>
                   <option value="INSTITUTION_ADMIN">Admin institution</option>
@@ -1418,11 +1582,18 @@ function DocumentsWorkspace({
   currentUser,
   exchangeCases,
   institutions,
+  notificationLevel,
+  notifications,
   onAssignCase,
+  onArchiveCase,
   onCreateCase,
   onDraftResponse,
   onDownloadAttachment,
+  onMarkAllNotificationsRead,
+  onMarkNotificationRead,
   onMissingAttachment,
+  onRunDueAlerts,
+  onSetNotificationLevel,
   onUploadAttachment,
   onValidateResponse,
   onWorkflowAction,
@@ -1436,11 +1607,18 @@ function DocumentsWorkspace({
   currentUser: AuthUser | null;
   exchangeCases: ExchangeCase[];
   institutions: Institution[];
+  notificationLevel: string;
+  notifications: NotificationItem[];
   onAssignCase: (caseId: string, assignedTo: string) => void;
+  onArchiveCase: (caseId: string) => void;
   onCreateCase: (event: FormEvent<HTMLFormElement>) => void;
   onDraftResponse: (caseId: string) => void;
   onDownloadAttachment: (caseId: string, attachment: Attachment) => void;
+  onMarkAllNotificationsRead: () => void;
+  onMarkNotificationRead: (notificationId: string) => void;
   onMissingAttachment: (reference: string) => void;
+  onRunDueAlerts: () => void;
+  onSetNotificationLevel: (level: string) => void;
   onUploadAttachment: (event: FormEvent<HTMLFormElement>) => void;
   onValidateResponse: (caseId: string, approved: boolean) => void;
   onWorkflowAction: (caseId: string, action: "send" | "receive" | "send-response" | "close") => void;
@@ -1465,6 +1643,10 @@ function DocumentsWorkspace({
   const shouldShowCases = listFeatures.includes(activeFeature);
   const filteredCases = getCasesForFeature(exchangeCases, activeFeature, currentUser?.id ?? null);
   const classificationStats = getClassificationStats(exchangeCases);
+  const visibleNotifications =
+    notificationLevel === "ALL"
+      ? notifications
+      : notifications.filter((notification) => notification.level === notificationLevel);
   const accessRows = currentUser
     ? [
         { label: "Identité", value: currentUser.full_name },
@@ -1562,8 +1744,13 @@ function DocumentsWorkspace({
               <option value="NORMAL">Normale</option>
               <option value="HIGH">Haute</option>
               <option value="URGENT">Urgente</option>
+              <option value="CRITICAL">Critique</option>
               <option value="LOW">Basse</option>
             </select>
+          </label>
+          <label>
+            <span>Échéance</span>
+            <input name="due_at" type="datetime-local" />
           </label>
           <label className="wide-field">
             <span>Description</span>
@@ -1773,6 +1960,11 @@ function DocumentsWorkspace({
                         Clôturer
                       </button>
                     ) : null}
+                    {item.status === "CLOSED" ? (
+                      <button className="ghost-button" onClick={() => onArchiveCase(item.id)} type="button">
+                        Archiver
+                      </button>
+                    ) : null}
                   </div>
                 </article>
               );
@@ -1784,12 +1976,24 @@ function DocumentsWorkspace({
       </section>
       ) : null}
 
+      {activeFeature === "notifications" ? (
+        <NotificationsPanel
+          notificationLevel={notificationLevel}
+          notifications={visibleNotifications}
+          onMarkAllRead={onMarkAllNotificationsRead}
+          onMarkRead={onMarkNotificationRead}
+          onRunDueAlerts={onRunDueAlerts}
+          onSetLevel={onSetNotificationLevel}
+        />
+      ) : null}
+
       {activeFeature &&
       !shouldShowCases &&
       activeFeature !== "access" &&
       activeFeature !== "new-case" &&
-      activeFeature !== "upload-document" ? (
-        <CapabilityPanel feature={activeFeature} />
+      activeFeature !== "upload-document" &&
+      activeFeature !== "notifications" ? (
+        <CapabilityPanel feature={activeFeature} onRunDueAlerts={onRunDueAlerts} />
       ) : null}
     </section>
   );
@@ -1950,6 +2154,8 @@ function StatusPill({ label }: { label: string }) {
     Observateur: "received",
     Auditeur: "urgent",
     Active: "approved",
+    Lue: "received",
+    "Non lue": "urgent",
   };
 
   return <span className={`status-badge ${tone[label] ?? "received"}`}>{label}</span>;
@@ -2005,6 +2211,7 @@ function formatRole(role: AuthUser["role"]) {
     AUDITOR: "Auditeur",
     INSTITUTION_ADMIN: "Admin institution",
     OBSERVER: "Observateur",
+    CONSULTANT: "Consultant",
     SYSTEM_ADMIN: "Admin système",
     VALIDATOR: "Validateur",
   };

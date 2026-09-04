@@ -42,6 +42,7 @@ class UserRole(str, enum.Enum):
     INSTITUTION_ADMIN = "INSTITUTION_ADMIN"
     AGENT = "AGENT"
     VALIDATOR = "VALIDATOR"
+    CONSULTANT = "CONSULTANT"
     OBSERVER = "OBSERVER"
     AUDITOR = "AUDITOR"
 
@@ -72,6 +73,7 @@ class CasePriority(str, enum.Enum):
     NORMAL = "NORMAL"
     HIGH = "HIGH"
     URGENT = "URGENT"
+    CRITICAL = "CRITICAL"
 
 
 class Classification(str, enum.Enum):

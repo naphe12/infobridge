@@ -8,6 +8,17 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     document_storage_path: str = "storage/documents"
     document_encryption_key: str | None = None
+    document_max_upload_bytes: int = 25 * 1024 * 1024
+    document_allowed_mime_types: str = (
+        "application/pdf,"
+        "image/png,"
+        "image/jpeg,"
+        "text/plain,"
+        "text/csv,"
+        "application/json,"
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document,"
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
     railway_volume_mount_path: str | None = None
 
     model_config = SettingsConfigDict(env_file="../.env", env_file_encoding="utf-8", extra="ignore")
@@ -21,6 +32,10 @@ class Settings(BaseSettings):
         if self.document_storage_path != "storage/documents":
             return self.document_storage_path
         return self.railway_volume_mount_path or self.document_storage_path
+
+    @property
+    def allowed_document_mime_types(self) -> set[str]:
+        return {mime_type.strip() for mime_type in self.document_allowed_mime_types.split(",") if mime_type.strip()}
 
 
 settings = Settings()

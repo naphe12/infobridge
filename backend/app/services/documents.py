@@ -9,6 +9,14 @@ from fastapi import UploadFile
 from app.core.config import settings
 
 
+class DocumentValidationError(ValueError):
+    status_code: int
+
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 def _fernet() -> Fernet:
     if settings.document_encryption_key:
         key = settings.document_encryption_key.encode()
@@ -20,6 +28,12 @@ def _fernet() -> Fernet:
 
 async def store_encrypted_upload(upload: UploadFile, *, case_id: uuid.UUID, purpose: str) -> dict[str, object]:
     content = await upload.read()
+    mime_type = upload.content_type or "application/octet-stream"
+    if len(content) > settings.document_max_upload_bytes:
+        raise DocumentValidationError("File exceeds the maximum allowed size", status_code=413)
+    if mime_type not in settings.allowed_document_mime_types:
+        raise DocumentValidationError("File type is not allowed", status_code=415)
+
     checksum = hashlib.sha256(content).hexdigest()
     stored_file_name = f"{case_id}-{uuid.uuid4()}.bin"
     storage_dir = Path(settings.effective_document_storage_path)
@@ -31,7 +45,7 @@ async def store_encrypted_upload(upload: UploadFile, *, case_id: uuid.UUID, purp
         "file_name": upload.filename or stored_file_name,
         "stored_file_name": stored_file_name,
         "file_path": str(file_path),
-        "mime_type": upload.content_type or "application/octet-stream",
+        "mime_type": mime_type,
         "size_bytes": len(content),
         "checksum": checksum,
         "purpose": purpose,
