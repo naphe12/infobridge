@@ -16,7 +16,8 @@ from app.services.storage import StorageConfigurationError, read_bytes
 class DocumentStorageTests(unittest.TestCase):
     def test_local_round_trip_uses_active_key_reference(self) -> None:
         key = Fernet.generate_key().decode()
-        with tempfile.TemporaryDirectory() as storage_path, (
+        with (
+            tempfile.TemporaryDirectory() as storage_path,
             patch.object(settings, "document_storage_backend", "local"),
             patch.object(settings, "document_storage_path", storage_path),
             patch.object(settings, "railway_volume_mount_path", None),
@@ -60,7 +61,8 @@ class DocumentStorageTests(unittest.TestCase):
                 return {"Plaintext": data_key}
 
         kms = FakeKmsClient()
-        with tempfile.TemporaryDirectory() as storage_path, (
+        with (
+            tempfile.TemporaryDirectory() as storage_path,
             patch.object(settings, "document_storage_backend", "local"),
             patch.object(settings, "document_storage_path", storage_path),
             patch.object(settings, "railway_volume_mount_path", None),

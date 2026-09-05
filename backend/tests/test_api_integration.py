@@ -18,11 +18,12 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models.audit import AuditLog
-from app.models.common import CaseStatus, Classification, InstitutionType, UserRole
+from app.models.common import CaseStatus, Classification, InstitutionType, SecuritySeverity, UserRole
 from app.models.exchange import Attachment, ExchangeCase, Receipt
 from app.models.governance import AccessRule
 from app.models.institution import Institution
 from app.models.notification import Notification
+from app.models.security import SecurityEvent
 from app.models.user import User
 from app.services.deadlines import create_due_alerts
 from app.services.documents import purge_expired_documents
@@ -176,6 +177,47 @@ class ApiIntegrationTests(unittest.TestCase):
         self.assertNotIn(str(case_id), {item["id"] for item in cases.json()})
         denied = self.client.post(f"/api/v1/cases/{case_id}/send", headers=self._headers(tokens))
         self.assertEqual(denied.status_code, 403, denied.text)
+
+    def test_audit_and_security_logs_enforce_roles_and_institution_boundaries(self) -> None:
+        with self.session_factory() as db:
+            auditor = User(
+                institution_id=self.sender_id,
+                full_name="Institution Auditor",
+                email=f"auditor-{uuid.uuid4().hex}@example.test",
+                password_hash=hash_password("IntegrationPassword123!"),
+                role=UserRole.AUDITOR,
+            )
+            db.add(auditor)
+            audit_rows = [
+                AuditLog(institution_id=institution_id, action="TEST_EVENT", entity_type="test")
+                for institution_id in (self.sender_id, self.receiver_id, None)
+            ]
+            security_rows = [
+                SecurityEvent(institution_id=institution_id, event_type="TEST_EVENT", severity=SecuritySeverity.HIGH)
+                for institution_id in (self.sender_id, self.receiver_id, None)
+            ]
+            db.add_all([*audit_rows, *security_rows])
+            db.commit()
+            auditor_id = auditor.id
+            expected = {
+                "/audit-logs?action=TEST_EVENT": [str(row.id) for row in audit_rows],
+                "/security-events?severity=HIGH": [str(row.id) for row in security_rows],
+            }
+
+        agent_headers = self._headers(self._login(self.agent_id))
+        auditor_headers = self._headers(self._login(auditor_id))
+        admin_headers = self._headers(self._login(self.admin_id))
+        for endpoint, identifiers in expected.items():
+            with self.subTest(endpoint=endpoint):
+                url = f"/api/v1{endpoint}"
+                self.assertEqual(self.client.get(url).status_code, 401)
+                self.assertEqual(self.client.get(url, headers=agent_headers).status_code, 403)
+                scoped = self.client.get(url, headers=auditor_headers)
+                self.assertEqual(scoped.status_code, 200, scoped.text)
+                self.assertEqual({row["id"] for row in scoped.json()}, {identifiers[0]})
+                global_view = self.client.get(url, headers=admin_headers)
+                self.assertEqual(global_view.status_code, 200, global_view.text)
+                self.assertTrue(set(identifiers).issubset({row["id"] for row in global_view.json()}))
 
     def test_transition_endpoint_rejects_skips_and_applies_valid_step(self) -> None:
         case_id = self._case()
@@ -344,7 +386,8 @@ class ApiIntegrationTests(unittest.TestCase):
 
     def test_document_purge_deletes_only_expired_archived_case_files(self) -> None:
         now = datetime.now(timezone.utc)
-        with tempfile.TemporaryDirectory() as storage_path, (
+        with (
+            tempfile.TemporaryDirectory() as storage_path,
             patch.object(settings, "document_storage_backend", "local"),
             patch.object(settings, "document_storage_path", storage_path),
             patch.object(settings, "railway_volume_mount_path", None),
