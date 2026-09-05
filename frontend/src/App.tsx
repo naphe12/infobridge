@@ -357,6 +357,7 @@ export function App() {
   const [loginError, setLoginError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [appMessage, setAppMessage] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [users, setUsers] = useState<PlatformUser[]>([]);
   const [assignees, setAssignees] = useState<PlatformUser[]>([]);
@@ -396,15 +397,20 @@ export function App() {
   }, [accessToken, isAuthenticated, userRole]);
 
   async function apiFetch<T>(path: string, init: RequestInit = {}) {
-    const performRequest = (token: string) =>
-      fetch(`${apiUrl}${path}`, {
-        ...init,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
-          ...init.headers,
-        },
-      });
+    const performRequest = async (token: string) => {
+      try {
+        return await fetch(`${apiUrl}${path}`, {
+          ...init,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+            ...init.headers,
+          },
+        });
+      } catch {
+        throw new Error(`Impossible de joindre l’API pour ${path}. Vérifiez la connexion ou réessayez dans quelques instants.`);
+      }
+    };
 
     let response = await performRequest(accessToken);
     if (response.status === 401 && !path.startsWith("/auth/")) {
@@ -414,7 +420,7 @@ export function App() {
 
     if (!response.ok) {
       const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
-      throw new Error(payload?.detail ?? `Erreur API ${response.status}`);
+      throw new Error(`${path} : ${payload?.detail ?? `Erreur API ${response.status}`}`);
     }
 
     return (await response.json()) as T;
@@ -503,8 +509,9 @@ export function App() {
         caseData.map(async (item) => [item.id, await apiFetch<Receipt[]>(`/cases/${item.id}/receipts`)] as const),
       );
       setReceiptsByCase(Object.fromEntries(receiptPairs));
+      setLoadError("");
     } catch (error) {
-      setAppMessage(error instanceof Error ? error.message : "Impossible de charger les données.");
+      setLoadError(error instanceof Error ? error.message : "Impossible de charger les données.");
     }
   }
 
@@ -1365,6 +1372,7 @@ export function App() {
 
         {activeSection === "overview" ? <Overview auditLogs={auditLogs} metrics={metrics} securityEvents={securityEvents} /> : null}
         {appMessage ? <p className="app-message">{appMessage}</p> : null}
+        {loadError ? <p className="app-message" role="alert">{loadError} <button className="ghost-button" onClick={() => void loadWorkspaceData()} type="button">Réessayer</button></p> : null}
         {activeSection === "admin" ? (
           <AdminWorkspace
             apiClientCredential={apiClientCredential}
