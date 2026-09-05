@@ -27,7 +27,9 @@ class UserRead(BaseModel):
     id: uuid.UUID
     institution_id: uuid.UUID
     full_name: str
-    email: EmailStr
+    # Historical/demo accounts can contain reserved domains such as .local.
+    # Validate new input strictly, but do not reject persisted accounts on read.
+    email: str
     role: UserRole
     status: UserStatus
     mfa_enabled: bool
