@@ -560,12 +560,18 @@ export function App() {
       });
 
       if (!response.ok) {
+        const errorPayload = (await response.json().catch(() => null)) as { detail?: string } | null;
         if (response.status === 401) {
-          setLoginError("Identifiants incorrects.");
+          setLoginError(
+            errorPayload?.detail === "Inactive or unknown user"
+              ? "Compte verrouillé ou désactivé. Contactez un administrateur."
+              : errorPayload?.detail === "Inactive institution"
+                ? "Votre institution est suspendue ou inactive. Contactez un administrateur."
+                : "Identifiants incorrects.",
+          );
           return;
         }
 
-        const errorPayload = (await response.json().catch(() => null)) as { detail?: string } | null;
         setLoginError(errorPayload?.detail ?? `Erreur API ${response.status}.`);
         return;
       }
