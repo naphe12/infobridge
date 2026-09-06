@@ -27,6 +27,7 @@ import {
   Mail,
   MessageSquareText,
   MoreHorizontal,
+  Pencil,
   Search,
   Send,
   ServerCog,
@@ -1938,14 +1939,21 @@ function AdminWorkspace({
 }) {
   const editedUser = adminDraft && typeof adminDraft === "object" && "user" in adminDraft ? adminDraft.user : null;
   const editedInstitution = adminDraft && typeof adminDraft === "object" && "institution" in adminDraft ? adminDraft.institution : null;
+  const adminFormPanelRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!adminDraft) return;
+    const panel = adminFormPanelRef.current;
+    panel?.scrollIntoView({ block: "start", behavior: "instant" });
+    panel?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
+  }, [adminDraft]);
   const institutionTypeOptions = getReferenceOptions(referenceItems, "institution_type", true);
   return (
     <section className="admin-layout">
       {adminDraft ? (
-        <section className="settings-panel">
+        <section className="settings-panel admin-editor" ref={adminFormPanelRef} aria-labelledby="admin-editor-title">
           <div className="panel-toolbar">
             <div>
-              <h2>{adminDraft === "institution" ? "Nouvelle institution" : editedInstitution ? "Modifier l’institution" : editedUser ? "Modifier l’utilisateur" : "Nouvel utilisateur"}</h2>
+              <h2 id="admin-editor-title">{adminDraft === "institution" ? "Nouvelle institution" : editedInstitution ? "Modifier l’institution" : editedUser ? "Modifier l’utilisateur" : "Nouvel utilisateur"}</h2>
               <p>
                 {adminDraft === "institution" || editedInstitution
                   ? editedInstitution ? "Mettre à jour l’identité de l’institution." : "Enregistrer une institution participante."
@@ -1958,7 +1966,7 @@ function AdminWorkspace({
           </div>
 
           {adminDraft === "institution" || editedInstitution ? (
-            <form className="request-form admin-form" onSubmit={editedInstitution ? (event) => onUpdateInstitution(editedInstitution.id, event) : onCreateInstitution}>
+            <form key={editedInstitution?.id ?? "new-institution"} className="request-form admin-form" onSubmit={editedInstitution ? (event) => onUpdateInstitution(editedInstitution.id, event) : onCreateInstitution}>
               <label>
                 <span>Nom</span>
                 <input defaultValue={editedInstitution?.name} name="name" placeholder="Ministère, agence, banque..." required />
@@ -1983,7 +1991,7 @@ function AdminWorkspace({
               </button>
             </form>
           ) : (
-            <form className="request-form admin-form" onSubmit={editedUser ? (event) => onUpdateUser(editedUser.id, event) : onCreateUser}>
+            <form key={editedUser?.id ?? "new-user"} className="request-form admin-form" onSubmit={editedUser ? (event) => onUpdateUser(editedUser.id, event) : onCreateUser}>
               <label>
                 <span>Nom complet</span>
                 <input defaultValue={editedUser?.full_name} name="full_name" placeholder="Nom de l'utilisateur" required />
@@ -2065,10 +2073,11 @@ function AdminWorkspace({
                 <StatusPill label={institution.status === "ACTIVE" ? "Active" : institution.status} />
                 <small>{institution.type}</small>
                 <div className="row-actions">
-                  <button className="ghost-button" onClick={() => onOpenAdminDraft({ institution })} type="button">
+                  <button className="secondary-button" aria-label={`Modifier ${institution.name}`} onClick={() => onOpenAdminDraft({ institution })} type="button">
+                    <Pencil size={16} aria-hidden="true" />
                     Modifier
                   </button>
-                  <button className="ghost-button" onClick={() => onInstitutionStatus(institution.id, institution.status === "ACTIVE" ? "SUSPENDED" : "ACTIVE")} type="button">
+                  <button className={institution.status === "ACTIVE" ? "ghost-button danger-button" : "ghost-button"} onClick={() => onInstitutionStatus(institution.id, institution.status === "ACTIVE" ? "SUSPENDED" : "ACTIVE")} type="button">
                     {institution.status === "ACTIVE" ? "Suspendre" : "Réactiver"}
                   </button>
                 </div>
@@ -2106,13 +2115,14 @@ function AdminWorkspace({
                 <StatusPill label={formatRole(user.role)} />
                 <small>{user.status}</small>
                 <div className="row-actions">
-                  <button className="ghost-button" onClick={() => onOpenAdminDraft({ user })} type="button">
+                  <button className="secondary-button" aria-label={`Modifier ${user.full_name}`} onClick={() => onOpenAdminDraft({ user })} type="button">
+                    <Pencil size={16} aria-hidden="true" />
                     Modifier
                   </button>
-                  <button className="ghost-button" onClick={() => onRevokeUserSessions(user.id)} type="button">
+                  <button className="ghost-button danger-button" onClick={() => onRevokeUserSessions(user.id)} type="button">
                     Révoquer sessions
                   </button>
-                  <button className="ghost-button" onClick={() => onUserStatus(user.id, user.status === "ACTIVE" ? "DISABLED" : "ACTIVE")} type="button">
+                  <button className={user.status === "ACTIVE" ? "ghost-button danger-button" : "ghost-button"} onClick={() => onUserStatus(user.id, user.status === "ACTIVE" ? "DISABLED" : "ACTIVE")} type="button">
                     {user.status === "ACTIVE" ? "Désactiver" : "Réactiver"}
                   </button>
                 </div>
