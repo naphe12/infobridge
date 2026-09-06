@@ -28,6 +28,10 @@ import {
   MessageSquareText,
   MoreHorizontal,
   Pencil,
+  RefreshCw,
+  Save,
+  Ban,
+  Play,
   Search,
   Send,
   ServerCog,
@@ -1378,7 +1382,7 @@ export function App() {
 
         {activeSection === "overview" ? <Overview auditLogs={auditLogs} metrics={metrics} securityEvents={securityEvents} /> : null}
         {appMessage ? <p className="app-message">{appMessage}</p> : null}
-        {loadError ? <p className="app-message" role="alert">{loadError} <button className="ghost-button" onClick={() => void loadWorkspaceData()} type="button">Réessayer</button></p> : null}
+        {loadError ? <p className="app-message" role="alert">{loadError} <button className="ghost-button" onClick={() => void loadWorkspaceData()} type="button"><RefreshCw size={16} aria-hidden="true" /> Réessayer</button></p> : null}
         {activeSection === "admin" ? (
           <AdminWorkspace
             apiClientCredential={apiClientCredential}
@@ -1830,7 +1834,7 @@ function NotificationsPanel({
               <StatusPill label={notification.read ? "Lue" : "Non lue"} />
               {!notification.read ? (
                 <button className="ghost-button" onClick={() => onMarkRead(notification.id)} type="button">
-                  Marquer lu
+                  <Eye size={16} aria-hidden="true" /> Marquer lu
                 </button>
               ) : null}
             </article>
@@ -1940,12 +1944,19 @@ function AdminWorkspace({
   const editedUser = adminDraft && typeof adminDraft === "object" && "user" in adminDraft ? adminDraft.user : null;
   const editedInstitution = adminDraft && typeof adminDraft === "object" && "institution" in adminDraft ? adminDraft.institution : null;
   const adminFormPanelRef = useRef<HTMLElement>(null);
+  const [userFields, setUserFields] = useState({ full_name: "", email: "", institution_id: "", role: "AGENT" });
   useEffect(() => {
     if (!adminDraft) return;
+    setUserFields({
+      full_name: editedUser?.full_name ?? "",
+      email: editedUser?.email ?? "",
+      institution_id: editedUser?.institution_id ?? "",
+      role: editedUser?.role ?? "AGENT",
+    });
     const panel = adminFormPanelRef.current;
     panel?.scrollIntoView({ block: "start", behavior: "instant" });
     panel?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
-  }, [adminDraft]);
+  }, [adminDraft, editedUser]);
   const institutionTypeOptions = getReferenceOptions(referenceItems, "institution_type", true);
   return (
     <section className="admin-layout">
@@ -1961,7 +1972,7 @@ function AdminWorkspace({
               </p>
             </div>
             <button className="ghost-button" onClick={onCancelAdminDraft} type="button">
-              Annuler
+              <X size={16} aria-hidden="true" /> Annuler
             </button>
           </div>
 
@@ -1986,7 +1997,7 @@ function AdminWorkspace({
                 </select>
               </label>
               <button className="primary-button" type="submit">
-                <Building2 size={18} />
+                {editedInstitution ? <Save size={18} aria-hidden="true" /> : <Building2 size={18} aria-hidden="true" />}
                 {editedInstitution ? "Enregistrer" : "Créer institution"}
               </button>
             </form>
@@ -1994,11 +2005,11 @@ function AdminWorkspace({
             <form key={editedUser?.id ?? "new-user"} className="request-form admin-form" onSubmit={editedUser ? (event) => onUpdateUser(editedUser.id, event) : onCreateUser}>
               <label>
                 <span>Nom complet</span>
-                <input defaultValue={editedUser?.full_name} name="full_name" placeholder="Nom de l'utilisateur" required />
+                <input value={userFields.full_name} onChange={(event) => setUserFields({ ...userFields, full_name: event.target.value })} name="full_name" placeholder="Nom de l'utilisateur" autoComplete="off" required />
               </label>
               <label>
                 <span>E-mail</span>
-                <input defaultValue={editedUser?.email} name="email" placeholder="user@institution.bi" required type="email" />
+                <input value={userFields.email} onChange={(event) => setUserFields({ ...userFields, email: event.target.value })} name="email" placeholder="user@institution.bi" autoComplete="off" required type="email" />
               </label>
               {!editedUser ? (
                 <label>
@@ -2008,7 +2019,7 @@ function AdminWorkspace({
               ) : null}
               <label>
                 <span>Institution</span>
-                <select defaultValue={editedUser?.institution_id ?? ""} name="institution_id" required>
+                <select value={userFields.institution_id} onChange={(event) => setUserFields({ ...userFields, institution_id: event.target.value })} name="institution_id" required>
                   <option value="">Sélectionner</option>
                   {institutions.map((institution) => (
                     <option key={institution.id} value={institution.id}>
@@ -2019,7 +2030,7 @@ function AdminWorkspace({
               </label>
               <label>
                 <span>Rôle</span>
-                <select defaultValue={editedUser?.role ?? "AGENT"} name="role">
+                <select value={userFields.role} onChange={(event) => setUserFields({ ...userFields, role: event.target.value })} name="role">
                   <option value="SYSTEM_ADMIN">Administrateur système</option>
                   <option value="AGENT">Agent</option>
                   <option value="VALIDATOR">Validateur</option>
@@ -2030,7 +2041,7 @@ function AdminWorkspace({
                 </select>
               </label>
               <button className="primary-button" type="submit">
-                <Users size={18} />
+                {editedUser ? <Save size={18} aria-hidden="true" /> : <Users size={18} aria-hidden="true" />}
                 {editedUser ? "Enregistrer" : "Créer utilisateur"}
               </button>
             </form>
@@ -2078,6 +2089,7 @@ function AdminWorkspace({
                     Modifier
                   </button>
                   <button className={institution.status === "ACTIVE" ? "ghost-button danger-button" : "ghost-button"} onClick={() => onInstitutionStatus(institution.id, institution.status === "ACTIVE" ? "SUSPENDED" : "ACTIVE")} type="button">
+                    {institution.status === "ACTIVE" ? <Ban size={16} aria-hidden="true" /> : <CheckCircle2 size={16} aria-hidden="true" />}
                     {institution.status === "ACTIVE" ? "Suspendre" : "Réactiver"}
                   </button>
                 </div>
@@ -2120,9 +2132,10 @@ function AdminWorkspace({
                     Modifier
                   </button>
                   <button className="ghost-button danger-button" onClick={() => onRevokeUserSessions(user.id)} type="button">
-                    Révoquer sessions
+                    <LogOut size={16} aria-hidden="true" /> Révoquer sessions
                   </button>
                   <button className={user.status === "ACTIVE" ? "ghost-button danger-button" : "ghost-button"} onClick={() => onUserStatus(user.id, user.status === "ACTIVE" ? "DISABLED" : "ACTIVE")} type="button">
+                    {user.status === "ACTIVE" ? <Ban size={16} aria-hidden="true" /> : <CheckCircle2 size={16} aria-hidden="true" />}
                     {user.status === "ACTIVE" ? "Désactiver" : "Réactiver"}
                   </button>
                 </div>
@@ -2236,7 +2249,7 @@ function PlatformSettingsPanel({
                       type="number"
                     />
                   )}
-                  {canEdit ? <button className="ghost-button" type="submit">Enregistrer</button> : null}
+                  {canEdit ? <button className="ghost-button" type="submit"><Save size={16} aria-hidden="true" /> Enregistrer</button> : null}
                 </form>
               ))}
             </div>
@@ -2310,7 +2323,7 @@ function ReferenceDataPanel({
                   <option value="false">Désactivée</option>
                 </select>
                 {item.required_active ? <input name="active" type="hidden" value="true" /> : null}
-                {canEdit ? <button className="ghost-button" type="submit">Enregistrer</button> : null}
+                {canEdit ? <button className="ghost-button" type="submit"><Save size={16} aria-hidden="true" /> Enregistrer</button> : null}
               </form>
             ))}
           </section>
@@ -2365,7 +2378,7 @@ function ApiClientsPanel({
             <div><dt>Client ID</dt><dd><code>{credential.client_key}</code></dd></div>
             <div><dt>Secret</dt><dd><code>{credential.client_secret}</code></dd></div>
           </dl>
-          <button className="ghost-button" onClick={onCredentialClose} type="button">J’ai copié les identifiants</button>
+          <button className="ghost-button" onClick={onCredentialClose} type="button"><CheckCircle2 size={16} aria-hidden="true" /> J’ai copié les identifiants</button>
         </div>
       ) : null}
 
@@ -2428,9 +2441,9 @@ function ApiClientsPanel({
               </fieldset>
               <small>Dernière utilisation : {client.last_used_at ? formatDateTime(client.last_used_at) : "jamais"}</small>
               <div className="row-actions">
-                {client.active ? <button className="ghost-button" type="submit">Enregistrer les scopes</button> : null}
-                <button className="ghost-button" disabled={!client.active} onClick={() => onRotateSecret(client)} type="button">Tourner le secret</button>
-                <button className="ghost-button" onClick={() => onStatus(client)} type="button">{client.active ? "Suspendre" : "Réactiver"}</button>
+                {client.active ? <button className="ghost-button" type="submit"><Save size={16} aria-hidden="true" /> Enregistrer les scopes</button> : null}
+                <button className="ghost-button" disabled={!client.active} onClick={() => onRotateSecret(client)} type="button"><RefreshCw size={16} aria-hidden="true" /> Tourner le secret</button>
+                <button className="ghost-button" onClick={() => onStatus(client)} type="button">{client.active ? <Ban size={16} aria-hidden="true" /> : <CheckCircle2 size={16} aria-hidden="true" />}{client.active ? "Suspendre" : "Réactiver"}</button>
               </div>
             </form>
           );
@@ -2784,10 +2797,10 @@ function DocumentsWorkspace({
             />
             <div className="workflow-draft-actions">
               <button className="ghost-button" onClick={onWorkflowDraftCancel} type="button">
-                Annuler
+                <X size={16} aria-hidden="true" /> Annuler
               </button>
               <button className="primary-button" type="submit">
-                Confirmer
+                <CheckCircle2 size={16} aria-hidden="true" /> Confirmer
               </button>
             </div>
           </form>
@@ -2860,22 +2873,22 @@ function DocumentsWorkspace({
                   <div className="workflow-actions">
                     {canAcknowledge && !currentReceipt ? (
                       <button className="ghost-button" onClick={() => onReceipt(item.id, false)} type="button">
-                        Accuser réception
+                        <FileCheck2 size={16} aria-hidden="true" /> Accuser réception
                       </button>
                     ) : null}
                     {canAcknowledge && currentReceipt && !currentReceipt.read_at ? (
                       <button className="ghost-button" onClick={() => onReceipt(item.id, true)} type="button">
-                        Marquer lu
+                        <Eye size={16} aria-hidden="true" /> Marquer lu
                       </button>
                     ) : null}
                     {item.status === "DRAFT" ? (
                       <button className="ghost-button" onClick={() => onWorkflowAction(item.id, "send")} type="button">
-                        Transmettre
+                        <Send size={16} aria-hidden="true" /> Transmettre
                       </button>
                     ) : null}
                     {item.status === "SENT" ? (
                       <button className="ghost-button" onClick={() => onWorkflowAction(item.id, "receive")} type="button">
-                        Réceptionner
+                        <Inbox size={16} aria-hidden="true" /> Réceptionner
                       </button>
                     ) : null}
                     {canAssign ? (
@@ -2890,32 +2903,32 @@ function DocumentsWorkspace({
                     ) : null}
                     {item.status === "ASSIGNED" ? (
                       <button className="ghost-button" onClick={() => onWorkflowAction(item.id, "start")} type="button">
-                        Démarrer
+                        <Play size={16} aria-hidden="true" /> Démarrer
                       </button>
                     ) : null}
                     {["IN_PROGRESS", "REJECTED"].includes(item.status) ? (
                       <button className="ghost-button" onClick={() => onDraftResponse(item.id)} type="button">
-                        Répondre
+                        <MessageSquareText size={16} aria-hidden="true" /> Répondre
                       </button>
                     ) : null}
                     {item.status === "PENDING_VALIDATION" ? (
                       <>
                         <button className="ghost-button" onClick={() => onValidateResponse(item.id, true)} type="button">
-                          Valider
+                          <CheckCircle2 size={16} aria-hidden="true" /> Valider
                         </button>
                         <button className="ghost-button" onClick={() => onValidateResponse(item.id, false)} type="button">
-                          Rejeter
+                          <X size={16} aria-hidden="true" /> Rejeter
                         </button>
                       </>
                     ) : null}
                     {item.status === "APPROVED" ? (
                       <button className="ghost-button" onClick={() => onWorkflowAction(item.id, "send-response")} type="button">
-                        Envoyer réponse
+                        <Send size={16} aria-hidden="true" /> Envoyer réponse
                       </button>
                     ) : null}
                     {item.status === "RESPONSE_SENT" ? (
                       <button className="ghost-button" onClick={() => onWorkflowAction(item.id, "close")} type="button">
-                        Clôturer
+                        <FileCheck2 size={16} aria-hidden="true" /> Clôturer
                       </button>
                     ) : null}
                     {item.status === "CLOSED" && currentUser && (
@@ -2923,7 +2936,7 @@ function DocumentsWorkspace({
                       (currentUser.role === "INSTITUTION_ADMIN" && item.sender_institution_id === currentUser.institution_id)
                     ) ? (
                       <button className="ghost-button" onClick={() => onArchiveCase(item.id)} type="button">
-                        Archiver
+                        <Archive size={16} aria-hidden="true" /> Archiver
                       </button>
                     ) : null}
                   </div>
