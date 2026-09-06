@@ -141,6 +141,8 @@ type ExchangeCase = {
   classification: string;
   assigned_to: string | null;
   due_at: string | null;
+  closed_at: string | null;
+  retention_until: string | null;
   created_at: string;
 };
 
@@ -1136,6 +1138,9 @@ export function App() {
     setActiveSection(section);
     setActiveFeature(feature);
     setWorkflowDraft(null);
+    if (feature === "retention") {
+      setCaseStatusFilter("ALL");
+    }
 
     if (feature === "invite-user") {
       setAdminDraft("user");
@@ -1711,6 +1716,7 @@ function getFeatureDescription(feature: FeatureKey | null) {
     "secure-transmission": "Transmettez les demandes en conservant la traçabilité.",
     validation: "Validez ou rejetez les réponses avant leur transmission.",
     lifecycle: "Pilotez chaque dossier jusqu'à clôture.",
+    retention: "Consultez les dossiers clôturés à archiver et les dossiers archivés avec leur échéance de conservation.",
   };
 
   return descriptions[feature] ?? "Accès contrôlé aux demandes et pièces téléversées";
@@ -2514,6 +2520,7 @@ function DocumentsWorkspace({
     "validation",
     "secure-response",
     "lifecycle",
+    "retention",
     "classification",
     "search",
   ];
@@ -2730,7 +2737,7 @@ function DocumentsWorkspace({
           </label>
           <select aria-label="Filtrer par statut" onChange={(event) => onSetCaseStatusFilter(event.target.value)} value={caseStatusFilter}>
             <option value="ALL">Tous les statuts</option>
-            {["DRAFT", "SENT", "RECEIVED", "ASSIGNED", "IN_PROGRESS", "PENDING_VALIDATION", "APPROVED", "REJECTED", "RESPONSE_SENT", "CLOSED", "ARCHIVED"].map((caseStatus) => (
+            {(activeFeature === "retention" ? ["CLOSED", "ARCHIVED"] : ["DRAFT", "SENT", "RECEIVED", "ASSIGNED", "IN_PROGRESS", "PENDING_VALIDATION", "APPROVED", "REJECTED", "RESPONSE_SENT", "CLOSED", "ARCHIVED"]).map((caseStatus) => (
               <option key={caseStatus} value={caseStatus}>{formatStatus(caseStatus)}</option>
             ))}
           </select>
@@ -2800,6 +2807,16 @@ function DocumentsWorkspace({
                     </p>
                     {caseAttachments.length ? (
                       <small>{caseAttachments.map((attachment) => `${attachment.file_name} (v${attachment.version})`).join(", ")}</small>
+                    ) : null}
+                    {activeFeature === "retention" ? (
+                      <small>
+                        {item.closed_at ? `Clôturé le ${formatDate(item.closed_at)} · ` : ""}
+                        {item.status === "CLOSED"
+                          ? "En attente d’archivage"
+                          : item.retention_until
+                            ? `Conservation jusqu’au ${formatDate(item.retention_until)}`
+                            : "Échéance de conservation non définie"}
+                      </small>
                     ) : null}
                     {caseReceipts.length ? (
                       <small className="receipt-summary">
@@ -2891,7 +2908,10 @@ function DocumentsWorkspace({
                         Clôturer
                       </button>
                     ) : null}
-                    {item.status === "CLOSED" ? (
+                    {item.status === "CLOSED" && currentUser && (
+                      currentUser.role === "SYSTEM_ADMIN" ||
+                      (currentUser.role === "INSTITUTION_ADMIN" && item.sender_institution_id === currentUser.institution_id)
+                    ) ? (
                       <button className="ghost-button" onClick={() => onArchiveCase(item.id)} type="button">
                         Archiver
                       </button>
@@ -2901,7 +2921,7 @@ function DocumentsWorkspace({
               );
             })
           ) : (
-            <p className="empty-state">Aucune demande ne correspond à cette vue.</p>
+            <p className="empty-state">{activeFeature === "retention" ? "Aucun dossier clôturé ou archivé ne correspond aux filtres sélectionnés." : "Aucune demande ne correspond à cette vue."}</p>
           )}
         </div>
       </section>
@@ -3298,6 +3318,10 @@ function getCasesForFeature(items: ExchangeCase[], feature: FeatureKey | null, c
 
   if (feature === "lifecycle") {
     return [...items].sort((first, second) => getLifecycleRank(first.status) - getLifecycleRank(second.status));
+  }
+
+  if (feature === "retention") {
+    return items.filter((item) => ["CLOSED", "ARCHIVED"].includes(item.status));
   }
 
   if (feature === "classification") {
