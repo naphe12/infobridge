@@ -2003,15 +2003,19 @@ h2 {
 
 @media (max-width: 1180px) {
   .login-shell {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) 360px;
   }
 
   .login-visual {
-    min-height: auto;
+    padding: 24px;
   }
 
   .login-panel {
-    padding-top: 0;
+    padding: 20px;
+  }
+
+  .login-assurance {
+    grid-template-columns: 1fr;
   }
 
   .metric-grid {
@@ -2170,6 +2174,15 @@ h2 {
 }
 
 @media (max-width: 640px) {
+  .login-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .login-visual {
+    gap: 24px;
+    min-height: auto;
+  }
+
   .login-visual,
   .login-panel {
     padding: 18px;
