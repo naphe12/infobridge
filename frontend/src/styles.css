@@ -1452,7 +1452,7 @@ h2 {
   background: #fbfcfd;
 }
 
-.user-row > span {
+.user-row > span:first-child {
   align-items: center;
   background: #ecedef;
   border-radius: 999px;
