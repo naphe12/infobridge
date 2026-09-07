@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from fastapi import HTTPException, status
 
 from app.models.common import CaseStatus
@@ -28,3 +29,4 @@ def transition_case(exchange_case: ExchangeCase, target: CaseStatus) -> None:
             detail=f"Invalid case transition: {exchange_case.status.value} -> {target.value}",
         )
     exchange_case.status = target
+    exchange_case.updated_at = datetime.now(timezone.utc)

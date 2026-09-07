@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -13,6 +13,9 @@ class ExchangeCase(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "exchange_cases"
 
     reference: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
+    request_type: Mapped[str] = mapped_column(String(80), nullable=False, default="GENERAL", server_default="GENERAL")
+    validation_steps: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    validation_progress: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     subject: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     sender_institution_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("institutions.id"), index=True)

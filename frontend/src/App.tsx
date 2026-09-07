@@ -1,3 +1,4 @@
+import { ProductivityWorkspace } from "./ProductivityWorkspace";
 import {
   Activity,
   AlertTriangle,
@@ -87,6 +88,7 @@ type FeatureKey =
   | "secure-response"
   | "lifecycle"
   | "retention"
+  | "productivity"
   | "audit"
   | "backup"
   | "notifications"
@@ -134,6 +136,7 @@ type PlatformUser = {
 };
 
 type ExchangeCase = {
+  request_type: string;
   id: string;
   reference: string;
   subject: string;
@@ -387,6 +390,7 @@ export function App() {
   const [caseClassificationFilter, setCaseClassificationFilter] = useState("ALL");
   const [workflowDraft, setWorkflowDraft] = useState<WorkflowDraft>(null);
   const [adminDraft, setAdminDraft] = useState<AdminDraft>(null);
+  const [workspaceCaseId, setWorkspaceCaseId] = useState("");
   const [activeFeature, setActiveFeature] = useState<FeatureKey | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard>({
     institutions: 0,
@@ -426,8 +430,9 @@ export function App() {
     }
 
     if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
-      throw new Error(`${path} : ${payload?.detail ?? `Erreur API ${response.status}`}`);
+      const payload = (await response.json().catch(() => null)) as { detail?: string | { msg?: string }[] } | null;
+      const detail = Array.isArray(payload?.detail) ? payload.detail.map(item => item.msg ?? "Valeur invalide").join(" ; ") : payload?.detail;
+      throw new Error(`${path} : ${detail ?? `Erreur API ${response.status}`}`);
     }
 
     return (await response.json()) as T;
@@ -620,6 +625,7 @@ export function App() {
     const file = formData.get("file");
     const dueAt = String(formData.get("due_at") ?? "");
     const payload = {
+      request_type: String(formData.get("request_type") ?? "GENERAL"),
       reference: String(formData.get("reference") ?? "").trim(),
       subject: String(formData.get("subject") ?? "").trim(),
       description: String(formData.get("description") ?? "").trim() || null,
@@ -1417,8 +1423,12 @@ export function App() {
             users={users}
           />
         ) : null}
-        {activeSection === "documents" ? (
+        {activeSection === "documents" && activeFeature === "productivity" && currentUser ? (
+          <ProductivityWorkspace api={apiFetch} cases={exchangeCases} currentUser={currentUser} institutions={institutions} initialCaseId={workspaceCaseId} onRefresh={loadWorkspaceData} />
+        ) : null}
+        {activeSection === "documents" && activeFeature !== "productivity" ? (
           <DocumentsWorkspace
+            onOpenWorkspace={(caseId) => { setWorkspaceCaseId(caseId); setActiveFeature("productivity"); }}
             attachmentsByCase={attachmentsByCase}
             activeFeature={activeFeature}
             currentUser={currentUser}
@@ -1616,6 +1626,7 @@ function getQuickAccessGroups(isAdmin: boolean): QuickAccessGroup[] {
         { description: "Traitement opérationnel des demandes", feature: "processing", icon: Workflow, label: "Traitement" },
         { description: "Validation hiérarchique avant envoi", feature: "validation", icon: ClipboardCheck, label: "Validation" },
         { description: "Suivi de la création à la clôture", feature: "lifecycle", icon: History, label: "Cycle de vie" },
+        { description: "Checklists, discussions, synthèse, délégations et blocages", feature: "productivity", icon: ClipboardCheck, label: "Espace de travail" },
         { description: "Conservation et archivage des dossiers", feature: "retention", icon: Archive, label: "Conservation" },
       ],
       description: "Affectation, traitement, validation et clôture.",
@@ -1691,6 +1702,7 @@ function getFeatureTitle(feature: FeatureKey) {
     "secure-response": "Envoi sécurisé des réponses",
     lifecycle: "Cycle de vie des dossiers",
     retention: "Conservation",
+    productivity: "Espace de travail des dossiers",
     audit: "Journalisation",
     backup: "Sauvegarde et reprise",
     notifications: "Notifications et alertes",
@@ -2455,6 +2467,7 @@ function ApiClientsPanel({
 }
 
 function DocumentsWorkspace({
+  onOpenWorkspace,
   activeFeature,
   attachmentsByCase,
   caseClassificationFilter,
@@ -2492,6 +2505,7 @@ function DocumentsWorkspace({
   users,
   workflowDraft,
 }: {
+  onOpenWorkspace: (caseId: string) => void;
   activeFeature: FeatureKey | null;
   attachmentsByCase: Record<string, Attachment[]>;
   caseClassificationFilter: string;
@@ -2635,6 +2649,10 @@ function DocumentsWorkspace({
           <label>
             <span>Référence</span>
             <input name="reference" placeholder="IB-2026-0050" required />
+          </label>
+          <label>
+            <span>Type de demande</span>
+            <input name="request_type" defaultValue="GENERAL" pattern="[A-Z0-9_]+" maxLength={80} required />
           </label>
           <label>
             <span>Objet</span>
@@ -2871,6 +2889,7 @@ function DocumentsWorkspace({
                     {primaryAttachment ? <Download size={18} /> : <UploadCloud size={18} />}
                   </button>
                   <div className="workflow-actions">
+                    <button className="secondary-button" type="button" onClick={() => onOpenWorkspace(item.id)}><ClipboardCheck size={16} />Espace dossier</button>
                     {canAcknowledge && !currentReceipt ? (
                       <button className="ghost-button" onClick={() => onReceipt(item.id, false)} type="button">
                         <FileCheck2 size={16} aria-hidden="true" /> Accuser réception

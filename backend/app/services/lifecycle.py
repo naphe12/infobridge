@@ -9,6 +9,7 @@ from app.db.session import SessionLocal
 from app.services.audit import write_audit_log
 from app.services.deadlines import apply_retention_policy, create_due_alerts
 from app.services.documents import purge_expired_documents
+from app.services.productivity import create_escalations
 from app.services.platform_settings import get_platform_setting
 
 _ADVISORY_LOCK_ID = 4_921_664_322
@@ -55,9 +56,10 @@ def run_lifecycle_scan() -> dict[str, Any]:
                     if due_alerts_enabled
                     else {"due_soon": 0, "overdue": 0}
                 )
+                escalations = create_escalations(db) if due_alerts_enabled else 0
                 archived = apply_retention_policy(db)
                 purge_result = purge_expired_documents(db) if purge_enabled else {"purged": 0, "failed": 0}
-                result = {**alerts, "archived": archived, **purge_result, "skipped": False}
+                result = {**alerts, "escalations": escalations, "archived": archived, **purge_result, "skipped": False}
                 write_audit_log(
                     db,
                     action="LIFECYCLE_SCAN_COMPLETED",

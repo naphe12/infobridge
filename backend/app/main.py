@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
+from app.api.productivity import router as productivity_router
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.services.lifecycle import run_lifecycle_scan
@@ -49,6 +50,7 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix="/api/v1")
+app.include_router(productivity_router, prefix="/api/v1")
 
 
 @app.get("/health")

@@ -8,6 +8,7 @@ from app.models.common import CasePriority, CaseStatus, Classification
 
 
 class ExchangeCaseCreate(BaseModel):
+    request_type: str = Field(default="GENERAL", min_length=1, max_length=80, pattern=r"^[A-Z0-9_]+$")
     reference: str = Field(min_length=4, max_length=80)
     subject: str = Field(min_length=3, max_length=500)
     description: str | None = Field(default=None, max_length=5000)
@@ -20,6 +21,9 @@ class ExchangeCaseCreate(BaseModel):
 
 
 class ExchangeCaseRead(BaseModel):
+    request_type: str = "GENERAL"
+    validation_steps: list[str] = Field(default_factory=list)
+    validation_progress: list[dict] = Field(default_factory=list)
     id: uuid.UUID
     reference: str
     subject: str

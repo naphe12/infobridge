@@ -45,7 +45,7 @@ class ApiIntegrationTests(unittest.TestCase):
             connection.execute(text(f'CREATE SCHEMA "{cls.schema}"'))
         cls.engine = create_engine(
             database_url,
-            connect_args={"options": f"-csearch_path={cls.schema},public"},
+            connect_args={"options": f"-csearch_path={cls.schema}"},
         )
         Base.metadata.create_all(cls.engine)
         cls.session_factory = sessionmaker(bind=cls.engine, expire_on_commit=False)
@@ -55,7 +55,11 @@ class ApiIntegrationTests(unittest.TestCase):
                 yield db
 
         app.dependency_overrides[get_db] = override_db
-        cls.client = TestClient(app, client=("127.0.0.1", 50000))
+        async def local_test_app(scope, receive, send):
+            # Compatible with the Starlette version pinned by FastAPI 0.115.
+            await app({**scope, "client": ("127.0.0.1", 50000)}, receive, send)
+
+        cls.client = TestClient(local_test_app)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -81,14 +85,14 @@ class ApiIntegrationTests(unittest.TestCase):
             admin = User(
                 institution_id=sender.id,
                 full_name="System Admin",
-                email=f"admin-{uuid.uuid4().hex}@example.test",
+                email=f"admin-{uuid.uuid4().hex}@example.com",
                 password_hash=hash_password("IntegrationPassword123!"),
                 role=UserRole.SYSTEM_ADMIN,
             )
             agent = User(
                 institution_id=sender.id,
                 full_name="Sender Agent",
-                email=f"agent-{uuid.uuid4().hex}@example.test",
+                email=f"agent-{uuid.uuid4().hex}@example.com",
                 password_hash=hash_password("IntegrationPassword123!"),
                 role=UserRole.AGENT,
             )
@@ -183,7 +187,7 @@ class ApiIntegrationTests(unittest.TestCase):
             auditor = User(
                 institution_id=self.sender_id,
                 full_name="Institution Auditor",
-                email=f"auditor-{uuid.uuid4().hex}@example.test",
+                email=f"auditor-{uuid.uuid4().hex}@example.com",
                 password_hash=hash_password("IntegrationPassword123!"),
                 role=UserRole.AUDITOR,
             )
@@ -273,7 +277,7 @@ class ApiIntegrationTests(unittest.TestCase):
             receiver_user = User(
                 institution_id=self.receiver_id,
                 full_name="Receiver Agent",
-                email=f"receiver-{uuid.uuid4().hex}@example.test",
+                email=f"receiver-{uuid.uuid4().hex}@example.com",
                 password_hash=hash_password("IntegrationPassword123!"),
                 role=UserRole.AGENT,
             )
@@ -322,7 +326,7 @@ class ApiIntegrationTests(unittest.TestCase):
             receiver_user = User(
                 institution_id=self.receiver_id,
                 full_name="Receipt Agent",
-                email=f"receipt-{uuid.uuid4().hex}@example.test",
+                email=f"receipt-{uuid.uuid4().hex}@example.com",
                 password_hash=hash_password("IntegrationPassword123!"),
                 role=UserRole.AGENT,
             )
@@ -460,7 +464,7 @@ class ApiIntegrationTests(unittest.TestCase):
             institution_admin = User(
                 institution_id=self.sender_id,
                 full_name="Institution Admin",
-                email=f"institution-admin-{uuid.uuid4().hex}@example.test",
+                email=f"institution-admin-{uuid.uuid4().hex}@example.com",
                 password_hash=hash_password("IntegrationPassword123!"),
                 role=UserRole.INSTITUTION_ADMIN,
             )

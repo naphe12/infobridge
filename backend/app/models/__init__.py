@@ -9,6 +9,9 @@ from app.models.user import User
 from app.models.workflow import Workflow, WorkflowAction
 
 __all__ = [
+    "CasePolicy",
+    "CaseComment",
+    "CaseDelegation",
     "Attachment",
     "AuthSession",
     "ApiClient",
@@ -26,3 +29,5 @@ __all__ = [
     "Workflow",
     "WorkflowAction",
 ]
+
+from app.models.productivity import CasePolicy, CaseComment, CaseDelegation

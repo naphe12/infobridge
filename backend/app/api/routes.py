@@ -1,3 +1,4 @@
+from app.services.productivity import enforce_checklist, prepare_validation, approve_step, is_case_operator
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -752,6 +753,7 @@ def create_case(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Creator must belong to the sender institution")
 
     exchange_case = ExchangeCase(
+        request_type=payload.request_type,
         reference=payload.reference.upper(),
         subject=payload.subject,
         sender_institution_id=payload.sender_institution_id,
@@ -798,6 +800,7 @@ def send_case(
     exchange_case = _get_case(db, case_id)
     _require_sender_access(exchange_case, current_user)
     enforce_case_permission(db, current_user, exchange_case, "cases.send")
+    enforce_checklist(db, exchange_case)
     if current_user.role == UserRole.AGENT and exchange_case.created_by != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the case creator can send it")
     transition_case(exchange_case, CaseStatus.SENT)
@@ -891,9 +894,10 @@ def draft_response(
     exchange_case = _get_case(db, case_id)
     _require_receiver_access(exchange_case, current_user)
     enforce_case_permission(db, current_user, exchange_case, "cases.respond")
-    if exchange_case.assigned_to and exchange_case.assigned_to != current_user.id and current_user.role == UserRole.AGENT:
+    if exchange_case.assigned_to and not is_case_operator(db, exchange_case, current_user) and current_user.role == UserRole.AGENT:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the assigned agent can draft this response")
     transition_case(exchange_case, CaseStatus.PENDING_VALIDATION)
+    prepare_validation(db, exchange_case)
     exchange_case.response_body = payload.response_body
     _record_workflow_action(db, exchange_case, current_user, "RESPONSE_DRAFTED", payload.comment)
     create_notifications_for_roles(
@@ -921,7 +925,7 @@ def start_case(
     exchange_case = _get_case(db, case_id)
     _require_receiver_access(exchange_case, current_user)
     enforce_case_permission(db, current_user, exchange_case, "cases.process")
-    if current_user.role == UserRole.AGENT and exchange_case.assigned_to != current_user.id:
+    if current_user.role == UserRole.AGENT and not is_case_operator(db, exchange_case, current_user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the assigned agent can start this case")
     transition_case(exchange_case, CaseStatus.IN_PROGRESS)
     _record_workflow_action(db, exchange_case, current_user, "CASE_STARTED", "Traitement démarré")
@@ -940,10 +944,18 @@ def validate_response(
     current_user: User = Depends(require_roles(UserRole.SYSTEM_ADMIN, UserRole.INSTITUTION_ADMIN, UserRole.VALIDATOR)),
 ) -> ExchangeCase:
     exchange_case = _get_case(db, case_id)
+    db.refresh(exchange_case, with_for_update=True)
     _require_receiver_access(exchange_case, current_user)
     enforce_case_permission(db, current_user, exchange_case, "cases.validate")
     if not payload.approved and not payload.comment:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A rejection comment is required")
+    complete = approve_step(exchange_case, current_user, payload.approved, payload.comment)
+    if payload.approved and not complete:
+        _record_workflow_action(db, exchange_case, current_user, "VALIDATION_STEP_APPROVED", payload.comment)
+        _audit_case_action(db, request, current_user, exchange_case, "VALIDATION_STEP_APPROVED")
+        db.commit()
+        db.refresh(exchange_case)
+        return exchange_case
     target_status = CaseStatus.APPROVED if payload.approved else CaseStatus.REJECTED
     transition_case(exchange_case, target_status)
     exchange_case.validated_by = current_user.id
@@ -965,7 +977,7 @@ def send_response(
     exchange_case = _get_case(db, case_id)
     _require_receiver_access(exchange_case, current_user)
     enforce_case_permission(db, current_user, exchange_case, "cases.send_response")
-    if current_user.role == UserRole.AGENT and exchange_case.assigned_to != current_user.id:
+    if current_user.role == UserRole.AGENT and not is_case_operator(db, exchange_case, current_user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the assigned agent can send this response")
     transition_case(exchange_case, CaseStatus.RESPONSE_SENT)
     exchange_case.response_sent_at = datetime.now(timezone.utc)
@@ -1405,7 +1417,7 @@ def create_api_client(
     )
     db.commit()
     db.refresh(client)
-    return ApiClientCreated.model_validate(client).model_copy(update={"client_secret": client_secret})
+    return ApiClientCreated(**ApiClientRead.model_validate(client).model_dump(), client_secret=client_secret)
 
 
 @router.get("/integrations/api-clients", response_model=list[ApiClientRead])
@@ -1483,7 +1495,7 @@ def rotate_api_client_secret(
     )
     db.commit()
     db.refresh(client)
-    return ApiClientSecretRotated.model_validate(client).model_copy(update={"client_secret": client_secret})
+    return ApiClientSecretRotated(**ApiClientRead.model_validate(client).model_dump(), client_secret=client_secret)
 
 
 @router.post("/integrations/token", response_model=ApiClientToken)
@@ -1819,6 +1831,7 @@ def _record_workflow_action(
     action: str,
     comment: str | None,
 ) -> WorkflowAction:
+    exchange_case.updated_at = datetime.now(timezone.utc)
     workflow = _get_or_create_workflow(db, exchange_case)
     workflow.current_step = action
     workflow.status = (
