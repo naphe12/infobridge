@@ -67,6 +67,28 @@ TEST_DATABASE_URL=postgresql+psycopg://infobridge:infobridge_dev_password@localh
 
 Tests that require PostgreSQL are skipped when `TEST_DATABASE_URL` is absent.
 
+## Password recovery
+
+Apply `alembic upgrade head` to create the password recovery tables (migration
+`0018_password_reset`). Set `PASSWORD_RESET_FRONTEND_URL` to the frontend address:
+`http://localhost:5173` locally, or the public HTTPS address in production.
+Links expire after 30 minutes and can be used once. Issuing a new link invalidates
+previous links; completing a reset revokes all sessions and unlocks a locked account.
+Disabled accounts and inactive institutions cannot recover access this way.
+
+For the **Mot de passe oublié** email flow, configure `SMTP_HOST`, `SMTP_FROM`,
+`SMTP_PORT`, and, if required, `SMTP_USERNAME` and `SMTP_PASSWORD` on the backend.
+Use `SMTP_SSL=false` for STARTTLS (usually port 587), or `true` for implicit TLS
+(usually port 465). Docker Compose passes these settings from `.env` to the backend.
+Without SMTP, administrators can still generate a link using **Réinitialiser**
+in the user list and share it privately with the account owner. Institution
+administrators can only reset non-system-admin accounts in their own institution.
+
+Email requests return the same message for known and unknown accounts and are
+limited to three per email address and twenty per client IP per clock hour.
+Behind a reverse proxy, configure trusted forwarded IPs so this limit uses the
+actual client address. Delivery failures are logged without reset links or credentials.
+
 ## Demo account
 
 After applying migrations, initialize or refresh the local demonstration data with:

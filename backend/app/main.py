@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.password_reset import router as password_reset_router
 from app.api.routes import router
 from app.api.productivity import router as productivity_router
 from app.core.config import settings
@@ -50,6 +51,7 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix="/api/v1")
+app.include_router(password_reset_router, prefix="/api/v1")
 app.include_router(productivity_router, prefix="/api/v1")
 
 

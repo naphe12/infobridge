@@ -18,7 +18,9 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models.audit import AuditLog
-from app.models.common import CaseStatus, Classification, InstitutionType, SecuritySeverity, UserRole
+from app.models.common import CaseStatus, Classification, InstitutionType, SecuritySeverity, UserRole, UserStatus
+from app.models.password_reset import PasswordReset, PasswordResetThrottle
+from app.core.security import hash_token
 from app.models.exchange import Attachment, ExchangeCase, Receipt
 from app.models.governance import AccessRule
 from app.models.institution import Institution
@@ -152,6 +154,111 @@ class ApiIntegrationTests(unittest.TestCase):
             self.client.get("/api/v1/auth/me", headers=self._headers(refreshed_tokens)).status_code,
             401,
         )
+
+    def _reset_link(self, headers, user_id=None):
+        with patch.object(settings, "password_reset_frontend_url", "http://localhost:5173"):
+            response = self.client.post(
+                f"/api/v1/users/{user_id or self.agent_id}/password-reset", headers=headers,
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        return response.json()["reset_url"].split("#reset-password=")[1]
+
+    def _confirm_reset(self, token, password="RecoveredPassword123!"):
+        return self.client.post("/api/v1/auth/password-reset/confirm", json={"token": token, "password": password})
+
+    def test_password_reset_is_single_use_and_revokes_sessions(self):
+        sessions = self._login(self.agent_id)
+        token = self._reset_link(self._headers(self._login(self.admin_id)))
+        with self.session_factory() as db:
+            record = db.scalar(select(PasswordReset))
+            self.assertEqual(record.token_hash, hash_token(token))
+            self.assertNotIn(token, str(record.__dict__))
+            user = db.get(User, self.agent_id)
+            user.status = UserStatus.LOCKED
+            user.failed_login_count = 5
+            email = user.email
+            db.commit()
+        response = self._confirm_reset(token)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self._confirm_reset(token).status_code, 400)
+        self.assertEqual(self.client.get("/api/v1/auth/me", headers=self._headers(sessions)).status_code, 401)
+        self.assertEqual(self.client.post("/api/v1/auth/refresh", json={"refresh_token": sessions["refresh_token"]}).status_code, 401)
+        self.assertEqual(self.client.post("/api/v1/auth/login", json={"email": email, "password": "IntegrationPassword123!"}).status_code, 401)
+        self.assertEqual(self.client.post("/api/v1/auth/login", json={"email": email, "password": "RecoveredPassword123!"}).status_code, 200)
+        with self.session_factory() as db:
+            self.assertEqual(db.get(User, self.agent_id).status, UserStatus.ACTIVE)
+            self.assertEqual(db.get(User, self.agent_id).failed_login_count, 0)
+
+    def test_password_reset_rejects_expired_replaced_and_changed_identity(self):
+        headers = self._headers(self._login(self.admin_id))
+        old = self._reset_link(headers)
+        token = self._reset_link(headers)
+        self.assertEqual(self._confirm_reset(old).status_code, 400)
+        with self.session_factory() as db:
+            record = db.scalar(select(PasswordReset).where(PasswordReset.token_hash == hash_token(token)))
+            record.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            db.commit()
+        self.assertEqual(self._confirm_reset(token).status_code, 400)
+        token = self._reset_link(headers)
+        with self.session_factory() as db:
+            db.get(User, self.agent_id).email = "changed@example.com"
+            db.commit()
+        self.assertEqual(self._confirm_reset(token).status_code, 400)
+        self.assertEqual(self._confirm_reset("x" * 64).status_code, 400)
+
+    def test_password_reset_validates_password_and_account_status(self):
+        token = self._reset_link(self._headers(self._login(self.admin_id)))
+        for password in ("short", "x" * 129):
+            self.assertEqual(self._confirm_reset(token, password).status_code, 422)
+        with self.session_factory() as db:
+            db.get(User, self.agent_id).status = UserStatus.DISABLED
+            db.commit()
+        self.assertEqual(self._confirm_reset(token).status_code, 400)
+
+    def test_password_reset_admin_scope(self):
+        agent_headers = self._headers(self._login(self.agent_id))
+        self.assertEqual(self.client.post(f"/api/v1/users/{self.agent_id}/password-reset", headers=agent_headers).status_code, 403)
+        self.assertEqual(self.client.post(f"/api/v1/users/{self.agent_id}/password-reset").status_code, 401)
+        headers = self._headers(self._login(self.admin_id))
+        with self.session_factory() as db:
+            db.get(User, self.admin_id).role = UserRole.INSTITUTION_ADMIN
+            db.commit()
+        self._reset_link(headers)
+        with self.session_factory() as db:
+            db.get(User, self.agent_id).institution_id = self.receiver_id
+            db.commit()
+        self.assertEqual(self.client.post(f"/api/v1/users/{self.agent_id}/password-reset", headers=headers).status_code, 403)
+
+    def test_password_reset_email_is_generic_and_throttled(self):
+        with self.session_factory() as db:
+            email = db.get(User, self.agent_id).email
+        with patch("app.api.password_reset.mail_ready", return_value=True), patch("app.api.password_reset.deliver_reset_email") as deliver, patch.object(settings, "password_reset_frontend_url", "http://localhost:5173"):
+            unknown = self.client.post("/api/v1/auth/password-reset/request", json={"email": "unknown@example.com"})
+            deliver.assert_not_called()
+            for _ in range(4):
+                response = self.client.post("/api/v1/auth/password-reset/request", json={"email": email.upper()})
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json(), unknown.json())
+            self.assertEqual(deliver.call_count, 3)
+            self.assertEqual(deliver.call_args.args[0], email)
+            token = deliver.call_args.args[1].split("#reset-password=")[1]
+        self.assertEqual(self._confirm_reset(token).status_code, 200)
+
+    def test_password_reset_ip_limit_and_missing_mail_configuration(self):
+        with patch("app.api.password_reset.mail_ready", return_value=False):
+            response = self.client.post("/api/v1/auth/password-reset/request", json={"email": "unknown@example.com"})
+            self.assertEqual(response.status_code, 503)
+        from app.services.password_reset import allow_request
+        with self.session_factory() as db:
+            for index in range(20):
+                self.assertTrue(allow_request(db, f"person{index}@example.com", "192.0.2.1"))
+            self.assertFalse(allow_request(db, "last@example.com", "192.0.2.1"))
+            self.assertTrue(allow_request(db, "last@example.com", "192.0.2.2"))
+            for record in db.scalars(select(PasswordResetThrottle)):
+                record.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            db.flush()
+            self.assertTrue(allow_request(db, "last@example.com", "192.0.2.1"))
 
     def test_permission_rules_filter_classification_and_deny_actions(self) -> None:
         case_id = self._case(classification=Classification.CONFIDENTIEL)

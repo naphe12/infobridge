@@ -7,6 +7,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://infobridge:infobridge_dev_password@localhost:5432/infobridge"
     api_cors_origins: str = "http://localhost:5173,https://infobridge-frontend-production.up.railway.app"
     secret_key: str = "change-me-in-production"
+    password_reset_frontend_url: str = "https://infobridge-frontend-production.up.railway.app"
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str | None = None
+    smtp_ssl: bool = False
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     login_failure_lock_threshold: int = 5

@@ -2281,3 +2281,11 @@ h2 {
 @media (max-width: 900px) {
   .productivity-grid { grid-template-columns: 1fr; }
 }
+
+.text-button { background: transparent; border: 0; color: var(--accent-strong); font-size: 13px; padding: 4px 0; text-decoration: underline; }
+.recovery-back { margin-top: 16px; }
+.reset-link-dialog { border: 1px solid var(--border); border-radius: 12px; padding: 24px; max-width: 540px; width: calc(100% - 32px); color: var(--ink); box-shadow: var(--shadow); }
+.reset-link-dialog::backdrop { background: rgba(15, 23, 42, 0.55); }
+.reset-link-dialog label { display: grid; gap: 8px; }
+.reset-link-dialog input { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.reset-link-dialog .row-actions { margin-top: 16px; }

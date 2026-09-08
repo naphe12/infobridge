@@ -1,3 +1,4 @@
+import { PasswordRecovery, ResetLinkDialog } from "./PasswordRecovery";
 import { ProductivityWorkspace } from "./ProductivityWorkspace";
 import {
   Activity,
@@ -364,6 +365,21 @@ export function App() {
   const [activeSection, setActiveSection] = useState<AppSection>(() =>
     sessionStorage.getItem("infobridge_role") === "admin" || sessionStorage.getItem("infobridge_role") === "auditor" ? "admin" : "documents",
   );
+  const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get("reset-password") ?? "");
+  const [forgotPassword, setForgotPassword] = useState(false);
+  const [resetLink, setResetLink] = useState<{ name: string; reset_url: string; expires_at: string } | null>(null);
+  const [resettingUserId, setResettingUserId] = useState<string | null>(null);
+  useEffect(() => {
+    function consumeResetLink() {
+      const params = new URLSearchParams(window.location.hash.slice(1));
+      if (!params.has("reset-password")) return;
+      setResetToken(params.get("reset-password") || "invalid");
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+    consumeResetLink();
+    window.addEventListener("hashchange", consumeResetLink);
+    return () => window.removeEventListener("hashchange", consumeResetLink);
+  }, []);
   const [loginError, setLoginError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [appMessage, setAppMessage] = useState("");
@@ -776,6 +792,15 @@ export function App() {
     }
   }
 
+  async function handlePasswordReset(userId: string) {
+    setResettingUserId(userId);
+    try {
+      const result = await apiFetch<{ reset_url: string; expires_at: string }>(`/users/${userId}/password-reset`, { method: "POST" });
+      setResetLink({ ...result, name: users.find(user => user.id === userId)?.full_name ?? "Utilisateur" });
+    } catch (error) { setAppMessage(error instanceof Error ? error.message : "Réinitialisation impossible."); }
+    finally { setResettingUserId(null); }
+  }
+
   async function handleRevokeUserSessions(userId: string) {
     const user = users.find((item) => item.id === userId);
     if (!window.confirm(`Révoquer toutes les sessions de ${user?.full_name ?? "cet utilisateur"} ?`)) {
@@ -1167,6 +1192,7 @@ export function App() {
   }
 
   function clearLocalSession() {
+    setResetLink(null);
     sessionStorage.removeItem("infobridge_session");
     sessionStorage.removeItem("infobridge_token");
     sessionStorage.removeItem("infobridge_refresh_token");
@@ -1190,7 +1216,7 @@ export function App() {
     }
   }
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated || resetToken) {
     return (
       <main className="login-shell">
         <section className="login-visual" aria-label="Présentation InfoBridge">
@@ -1226,6 +1252,7 @@ export function App() {
 
         <section className="login-panel" aria-label="Formulaire de connexion">
           <div className="login-card">
+            {forgotPassword || resetToken ? <PasswordRecovery key={resetToken || "request"} token={resetToken} apiUrl={apiUrl} onBack={() => { setForgotPassword(false); setResetToken(""); setLoginError(""); clearLocalSession(); }} /> : <>
             <div className="login-card-header">
               <span className="login-icon">
                 <LogIn size={20} />
@@ -1266,7 +1293,7 @@ export function App() {
                   <input type="checkbox" />
                   <span>Garder la session active</span>
                 </label>
-                <a href="/">Mot de passe oublié</a>
+                <button className="text-button" type="button" onClick={() => setForgotPassword(true)}>Mot de passe oublié</button>
               </div>
 
               {loginError ? <p className="form-error">{loginError}</p> : null}
@@ -1276,6 +1303,7 @@ export function App() {
                 Accéder à InfoBridge
               </button>
             </form>
+            </>}
           </div>
         </section>
       </main>
@@ -1284,6 +1312,7 @@ export function App() {
 
   return (
     <main className="app-shell">
+      {resetLink && <ResetLinkDialog data={resetLink} onClose={() => setResetLink(null)} />}
       <aside className="sidebar" aria-label="Navigation principale">
         <div className="brand">
           <span className="brand-mark">
@@ -1391,6 +1420,8 @@ export function App() {
         {loadError ? <p className="app-message" role="alert">{loadError} <button className="ghost-button" onClick={() => void loadWorkspaceData()} type="button"><RefreshCw size={16} aria-hidden="true" /> Réessayer</button></p> : null}
         {activeSection === "admin" ? (
           <AdminWorkspace
+            onPasswordReset={handlePasswordReset}
+            resettingUserId={resettingUserId}
             apiClientCredential={apiClientCredential}
             apiClients={apiClients}
             apiScopes={apiScopes}
@@ -1891,6 +1922,8 @@ function Overview({
 }
 
 function AdminWorkspace({
+  onPasswordReset,
+  resettingUserId,
   activeFeature,
   adminDraft,
   apiClientCredential,
@@ -1922,6 +1955,8 @@ function AdminWorkspace({
   securityEvents,
   users,
 }: {
+  onPasswordReset: (userId: string) => void;
+  resettingUserId: string | null;
   activeFeature: FeatureKey | null;
   adminDraft: AdminDraft;
   apiClientCredential: ApiClientCredential | null;
@@ -2143,6 +2178,7 @@ function AdminWorkspace({
                     <Pencil size={16} aria-hidden="true" />
                     Modifier
                   </button>
+                  {currentUser && ["ACTIVE", "LOCKED"].includes(user.status) && (currentUser.role === "SYSTEM_ADMIN" || (currentUser.role === "INSTITUTION_ADMIN" && user.institution_id === currentUser.institution_id && user.role !== "SYSTEM_ADMIN")) && <button className="ghost-button" disabled={resettingUserId !== null} onClick={() => onPasswordReset(user.id)} type="button"><KeyRound size={16} />{resettingUserId === user.id ? "Création du lien…" : "Réinitialiser"}</button>}
                   <button className="ghost-button danger-button" onClick={() => onRevokeUserSessions(user.id)} type="button">
                     <LogOut size={16} aria-hidden="true" /> Révoquer sessions
                   </button>

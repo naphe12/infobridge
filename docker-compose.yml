@@ -34,6 +34,13 @@ services:
       DATABASE_URL: postgresql+psycopg://infobridge:infobridge_dev_password@postgres:5432/infobridge
       API_CORS_ORIGINS: http://localhost:5173
       SECRET_KEY: local-dev-secret-change-me
+      PASSWORD_RESET_FRONTEND_URL: ${PASSWORD_RESET_FRONTEND_URL:-http://localhost:5173}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_SSL: ${SMTP_SSL:-false}
       ACCESS_TOKEN_EXPIRE_MINUTES: 15
       LIFECYCLE_WORKER_ENABLED: "true"
       LIFECYCLE_SCAN_INTERVAL_SECONDS: 3600
